@@ -7,11 +7,12 @@ schedules) go to the Settings Channel aggregate under the app's key. See README.
 
 from __future__ import annotations
 
+import math
 import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SETTINGS_SCHEMA = 1
 APP_NAME = "pivot_control"
@@ -193,7 +194,7 @@ def scale_pressure(
 
 def normalise_angle(value: Any) -> float | None:
     number = coerce_number(value)
-    if number is None or number != number:  # NaN
+    if number is None or math.isnan(number):
         return None
     return number % 360.0
 
@@ -279,7 +280,7 @@ def start_request(
         raise ValueError(f"unknown end mode {end_mode!r}")
     stop_angle_deg = validate_angle(stop_angle) if end_mode == END_AT_ANGLE else None
     duration_s = (
-        int(round(validate_hours(run_hours, max_hours) * 3600))
+        round(validate_hours(run_hours, max_hours) * 3600)
         if end_mode == END_AFTER_TIME
         else None
     )
@@ -397,7 +398,7 @@ def local_time(ts_ms: int | None, tz_name: str) -> datetime | None:
 def _zone(tz_name: str) -> ZoneInfo:
     try:
         return ZoneInfo(tz_name or "Australia/Brisbane")
-    except Exception:
+    except (ValueError, ZoneInfoNotFoundError):
         return ZoneInfo("Australia/Brisbane")
 
 
@@ -409,7 +410,7 @@ def schedule_for_edge(s: dict, tz_name: str, max_hours: float) -> dict:
         hours = float(s["run_hours"])
         if max_hours:
             hours = min(hours, max_hours)
-        duration_s = int(round(hours * 3600))
+        duration_s = round(hours * 3600)
     problem = schedule_problem(s)
     return {
         "slot": s["slot"],
@@ -459,7 +460,7 @@ def settings_payload(
         "targets": targets,
         "percent_timer_cycle_s": cycle_s,
         "default_speed_percent": default_speed,
-        "max_run_s": int(round(max_run_hours * 3600)) if max_run_hours else None,
+        "max_run_s": round(max_run_hours * 3600) if max_run_hours else None,
         "timezone": tz_name,
         "schedules": [schedule_for_edge(s, tz_name, max_run_hours) for s in schedules],
         "updated_ts": ts if ts is not None else now_ms(),

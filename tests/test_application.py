@@ -232,6 +232,6 @@ async def test_schedule_edit_publishes_settings(harness):
 async def test_deployment_publishes_settings(harness):
     app = await harness.app()
     await app.on_deployment(None)
-    channel, data, kwargs = harness.api.aggregates[-1]
+    channel, data, _kwargs = harness.api.aggregates[-1]
     assert channel == "control_settings" and APP_KEY in data
     assert harness.notifications.sent == []

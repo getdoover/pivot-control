@@ -81,7 +81,7 @@ class PivotControlApplication(Application):
         """A config value, or the default when it is missing or null (never raises)."""
         try:
             value = getattr(self.config, field).value
-        except Exception:
+        except (AttributeError, ValueError):
             return default
         return default if value is None else value
 
@@ -108,7 +108,7 @@ class PivotControlApplication(Application):
         try:
             source = self.config.angle_source
             return source.app_name.value or None, source.tag_name.value or None
-        except Exception:
+        except (AttributeError, ValueError):
             return None, None
 
     async def _set(self, name: str, value):
