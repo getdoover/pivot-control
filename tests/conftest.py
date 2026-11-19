@@ -37,9 +37,15 @@ class FakeApi:
         # as a device without permission does.
         self.remote = {}
         self.fetched = []
+        # This device's own channel aggregates, as this app's writes leave them.
+        self.own = {}
 
     async def fetch_channel_aggregate(self, channel, agent_id=None, **kwargs):
         self.fetched.append((agent_id, channel))
+        if agent_id is None:
+            if channel not in self.own:
+                raise LookupError(f"no {channel} aggregate yet")
+            return SimpleNamespace(data=copy.deepcopy(self.own[channel]))
         if (agent_id, channel) not in self.remote:
             raise PermissionError(f"no access to {channel} on {agent_id}")
         return SimpleNamespace(data=self.remote[(agent_id, channel)])
@@ -49,6 +55,18 @@ class FakeApi:
 
     async def update_channel_aggregate(self, channel, data, **kwargs):
         self.aggregates.append((channel, data, kwargs))
+        current = self.own.setdefault(channel, {})
+        for key, value in copy.deepcopy(data).items():
+            if key in (kwargs.get("replace_keys") or []) or not isinstance(value, dict):
+                current[key] = value
+            else:
+                current.setdefault(key, {}).update(value)
+
+    def commands(self):
+        return [d for c, d in self.messages if c == "io_commands"]
+
+    def settings(self):
+        return self.own.get("control_settings", {}).get(APP_KEY)
 
 
 class FakeNotification:

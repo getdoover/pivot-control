@@ -300,21 +300,43 @@ class PivotControlConfig(config.Schema):
     default_speed = config.Number(
         "Default Speed (%)",
         name="default_speed",
-        description="Speed offered for a new start or schedule.",
+        description="Speed offered for a new start or schedule step, and the speed of Simple schedules.",
         default=50.0,
         minimum=1,
         maximum=100,
         position=27,
     )
+    simple_wet = config.Boolean(
+        "Simple Schedules Run Wet",
+        name="simple_wet",
+        description=(
+            "Whether a Simple schedule runs wet (the supply pump on) or dry. Detailed "
+            "schedules choose for each step."
+        ),
+        default=True,
+        position=28,
+    )
+    schedule_state_path = config.String(
+        "Schedule State Path",
+        name="schedule_state_path",
+        description=(
+            "Optional message path where the edge reports the running schedule's progress "
+            "({schedule_id, step_index, step_progress, status}). Leave empty to show this "
+            "app's estimate from the angle and elapsed time."
+        ),
+        default="",
+        position=29,
+    )
     max_run_hours = config.Number(
         "Max Run Hours",
         name="max_run_hours",
         description=(
-            "Longest a run may last; the edge controller stops the pivot after it. 0 = no limit."
+            "Longest a run (or a schedule step's run time) may last; the edge controller "
+            "stops the pivot after it. 0 = no limit."
         ),
         default=0.0,
         minimum=0,
-        position=28,
+        position=30,
     )
     confirm_timeout_s = config.Number(
         "Command Confirm Timeout (s)",
@@ -325,11 +347,11 @@ class PivotControlConfig(config.Schema):
         ),
         default=120.0,
         minimum=10,
-        position=29,
+        position=31,
     )
     dv_proc_timezone = TimezoneConfig(
-        description="Timezone schedule start times are shown and sent to the edge in.",
-        position=30,
+        description="Timezone sent to the edge with the settings.",
+        position=32,
     )
 
     # --- Supply pump (a pump on another device that waters the pivot) ------------
@@ -342,7 +364,7 @@ class PivotControlConfig(config.Schema):
         ),
         default=None,
         required=False,
-        position=31,
+        position=33,
     )
     supply_pump_app_key = config.String(
         "Supply Pump App Key",
@@ -350,7 +372,7 @@ class PivotControlConfig(config.Schema):
         description="The Pump Control install's app key on that device, e.g. 'pump_control_1'.",
         default=None,
         required=False,
-        position=32,
+        position=34,
     )
     supply_pump_target = config.String(
         "Supply Pump Target ID",
@@ -358,7 +380,7 @@ class PivotControlConfig(config.Schema):
         description="The pump's Target ID in that install, e.g. 'pump_1'.",
         default=None,
         required=False,
-        position=33,
+        position=35,
     )
     supply_pump_with_pivot = config.Boolean(
         "Start Pump with Pivot Runs",
@@ -368,7 +390,7 @@ class PivotControlConfig(config.Schema):
             "scheduled) and stops it when the run ends."
         ),
         default=True,
-        position=34,
+        position=36,
     )
     supply_pump_lead_s = config.Number(
         "Pump Lead Time (s)",
@@ -376,7 +398,7 @@ class PivotControlConfig(config.Schema):
         description="Seconds the pump runs before the pivot starts, to fill the line.",
         default=0.0,
         minimum=0,
-        position=35,
+        position=37,
     )
     supply_pump_run_on_s = config.Number(
         "Pump Run-On (s)",
@@ -384,7 +406,7 @@ class PivotControlConfig(config.Schema):
         description="Seconds the pump keeps running after the pivot stops.",
         default=0.0,
         minimum=0,
-        position=36,
+        position=38,
     )
     extended_permissions = ExtendedPermissionsConfig(
         extra_fields=["id", "name", "display_name"],
@@ -395,7 +417,7 @@ class PivotControlConfig(config.Schema):
             "all_devices": False,
         },
         required=False,
-        position=37,
+        position=39,
     )
 
     # --- Channels ----------------------------------------------------------------
@@ -404,18 +426,18 @@ class PivotControlConfig(config.Schema):
         name="command_channel",
         description="Channel commands are published on, one message each. The edge may reply there.",
         default="io_commands",
-        position=39,
+        position=41,
         advanced=True,
     )
     settings_channel = config.String(
         "Settings Channel",
         name="settings_channel",
         description=(
-            "Channel whose aggregate carries the settings and schedules the edge runs, "
+            "Channel whose aggregate carries the settings and the schedule the edge runs, "
             "under this app's key."
         ),
         default="control_settings",
-        position=40,
+        position=42,
         advanced=True,
     )
     subscription = ManySubscriptionConfig(
@@ -425,17 +447,30 @@ class PivotControlConfig(config.Schema):
             "controls, the Command Channel for replies and tag_values for the angle."
         ),
         advanced=True,
-        position=41,
+        position=43,
     )
     dv_proc_schedules = ScheduleConfig(
         default="rate(5 minutes)",
-        description="How often unconfirmed commands and schedule summaries are re-checked.",
+        description="How often unconfirmed commands and the schedule's progress are re-checked.",
         advanced=True,
-        position=42,
+        position=44,
     )
 
-    position = config.ApplicationPosition(default=10, position=43)
-    default_open = config.ApplicationDefaultOpen(default=True, position=44)
+    demo_simulate_controller = config.Boolean(
+        "Simulate Controller (demo)",
+        name="demo_simulate_controller",
+        description=(
+            "For demos only, with no edge controller connected: schedules are treated as "
+            "accepted by the controller at once and their progress is shown as reported, "
+            "not estimated. Leave off on a real site."
+        ),
+        default=False,
+        advanced=True,
+        position=45,
+    )
+
+    position = config.ApplicationPosition(default=10, position=46)
+    default_open = config.ApplicationDefaultOpen(default=True, position=47)
 
 
 def export():

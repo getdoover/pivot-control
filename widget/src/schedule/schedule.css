@@ -1,0 +1,61 @@
+/* No preflight: the widget renders inside the Doover site, whose base styles it keeps. */
+@layer theme, base, utilities;
+@import "tailwindcss/theme" layer(theme);
+@import "tailwindcss/utilities" layer(utilities);
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+/* Just enough reset for the widget's own controls, under the utilities. */
+@layer base {
+  :where(.psw) *,
+  :where(.psw) *::before,
+  :where(.psw) *::after {
+    box-sizing: border-box;
+    border: 0 solid;
+  }
+  :where(.psw) button,
+  :where(.psw) input {
+    font: inherit;
+    color: inherit;
+    margin: 0;
+    background: transparent;
+  }
+  :where(.psw) button {
+    cursor: pointer;
+    padding: 0;
+  }
+  :where(.psw) button:disabled {
+    cursor: default;
+  }
+  :where(.psw) ol,
+  :where(.psw) ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  :where(.psw) input::-webkit-outer-spin-button,
+  :where(.psw) input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  :where(.psw) input[type="number"] {
+    -moz-appearance: textfield;
+  }
+}

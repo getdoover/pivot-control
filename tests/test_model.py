@@ -134,52 +134,6 @@ def test_build_command_shape():
     )
 
 
-def test_schedules_roundtrip():
-    schedules = model.normalise_schedules(None, 50)
-    assert [s["slot"] for s in schedules] == [1, 2, 3, 4]
-    s = schedules[0]
-    s = model.apply_schedule_edit(s, "enabled", True)
-    assert model.schedule_problem(s) == "no start time"
-    # 2026-11-20 06:00 in Brisbane (UTC+10) = 2026-11-19 20:00 UTC
-    start = 1795118400000
-    s = model.apply_schedule_edit(s, "start", start)
-    s = model.apply_schedule_edit(s, "direction", "reverse")
-    s = model.apply_schedule_edit(s, "speed", 70)
-    s = model.apply_schedule_edit(s, "end", model.END_AFTER_TIME)
-    assert model.schedule_problem(s) == "no run time"
-    s = model.apply_schedule_edit(s, "hours", 12)
-    assert (
-        model.schedule_summary(s, "Australia/Brisbane", now=0)
-        == "Fri 20 Nov 06:00, Reverse 70 %, 12 h"
-    )
-    assert model.schedule_summary(s, "Australia/Brisbane", now=start + 1).endswith(
-        "(past)"
-    )
-
-    edge = model.schedule_for_edge(s, "Australia/Brisbane", max_hours=10)
-    assert edge == {
-        "slot": 1,
-        "enabled": True,
-        "start_ts": start,
-        "start_local": "2026-11-20T06:00:00+10:00",
-        "direction": "reverse",
-        "speed_percent": 70.0,
-        "stop_angle_deg": None,
-        "duration_s": 36000,  # capped at max run hours
-    }
-
-    with pytest.raises(ValueError):
-        model.apply_schedule_edit(s, "speed", 0)
-    with pytest.raises(ValueError):
-        model.apply_schedule_edit(s, "direction", "up")
-
-
-def test_incomplete_schedule_is_sent_disabled():
-    s = model.apply_schedule_edit(model.empty_schedule(2, 50), "enabled", True)
-    assert model.schedule_for_edge(s, "Australia/Brisbane", 0)["enabled"] is False
-    assert model.schedule_summary(s, "Australia/Brisbane") == "Not set: no start time"
-
-
 def test_settings_payload():
     payload = model.settings_payload(
         targets={"run": "run", "forward": "forward", "reverse": "reverse"},
@@ -187,13 +141,15 @@ def test_settings_payload():
         default_speed=50,
         max_run_hours=0,
         tz_name="Australia/Brisbane",
-        schedules=model.normalise_schedules([], 50),
+        schedule=None,
+        history=[],
         ts=1,
     )
-    assert payload["app"] == "pivot_control" and payload["schema"] == 1
+    assert payload["app"] == "pivot_control" and payload["schema"] == 2
     assert payload["max_run_s"] is None
-    assert len(payload["schedules"]) == 4
-    assert all(not s["enabled"] for s in payload["schedules"])
+    assert payload["schedule"] is None
+    assert payload["schedule_state"] == {"active": None, "history": []}
+    assert "schedules" not in payload
 
 
 # --------------------------------------------------------------------------- geometry

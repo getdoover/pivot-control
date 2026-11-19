@@ -37,12 +37,12 @@ class PivotControlTags(Tags):
     command_message = Tag("string", default="")
     command_warning_hidden = Tag("boolean", default=True)
 
-    # Schedules (the operator's edits; the edge runs them from the Settings Channel).
-    schedules = Tag("array", default=None)
-    sched_1_summary = Tag("string", default="Off")
-    sched_2_summary = Tag("string", default="Off")
-    sched_3_summary = Tag("string", default="Off")
-    sched_4_summary = Tag("string", default="Off")
+    # Schedule (the edge runs it from the Settings Channel; these mirror what is stored there).
+    schedule_active = Tag(
+        "object", default=None
+    )  # the running schedule, with its progress
+    schedule_history = Tag("array", default=None)  # the last five, newest first
+    edge_schedule_state = Tag("object", default=None)  # as the edge last reported it
 
     # Notification latches, so each fires once per occurrence.
     safety_alert_active = Tag("boolean", default=False)

@@ -1,16 +1,17 @@
 """Pivot Control: remote control and monitoring of a centre pivot through an edge controller.
 
-The edge controller is the source of truth: it drives the outputs, runs the schedules and
-reports the outputs' state. This app shows that reported state, sends Start / Stop commands
-on the Command Channel and keeps the settings the edge enforces (defaults, limits and the
-operator's schedules) in the Settings Channel aggregate under its app key.
+The edge controller is the source of truth: it drives the outputs, runs the schedule and
+reports the outputs' state. This app shows that reported state, sends Start / Stop and the
+schedule's start / pause / resume / end commands on the Command Channel and keeps the
+settings the edge enforces (defaults, limits and the running schedule) in the Settings
+Channel aggregate under its app key. The Schedule widget on the page talks to it through
+RPCs on ui_cmds.
 """
 
 import logging
-import re
 from typing import Any
 
-from pydoover import ui
+from pydoover import rpc, ui
 from pydoover.models import (
     AggregateUpdateEvent,
     DeploymentEvent,
@@ -18,6 +19,7 @@ from pydoover.models import (
     ScheduleEvent,
 )
 from pydoover.processor import Application
+from pydoover.rpc import RPCError
 
 from . import model
 from .app_config import POSITION_FROM_LOCATION, PivotControlConfig
@@ -39,11 +41,23 @@ INPUTS = (
     ("speed_state_path", "reported_speed", "number"),
     ("safety_path", "safety_input", "number"),
     ("pressure_path", "pressure_input", "number"),
+    ("schedule_state_path", "edge_schedule_state", "object"),
 )
 
-SCHEDULE_RE = re.compile(
-    r"^sched_(\d)_(enabled|start|direction|speed|end|stop_angle|hours)$"
+# Tags of the four fixed schedule slots this app used to have, cleared on deployment.
+LEGACY_SCHEDULE_TAGS = (
+    "schedules",
+    "sched_1_summary",
+    "sched_2_summary",
+    "sched_3_summary",
+    "sched_4_summary",
 )
+
+SCHEDULE_COMMANDS = {
+    "schedule_pause": "Schedule paused",
+    "schedule_resume": "Schedule resumed",
+    "schedule_end": "Schedule ended",
+}
 
 
 class PivotControlApplication(Application):
@@ -67,6 +81,7 @@ class PivotControlApplication(Application):
         return True
 
     async def setup(self):
+        self._schedule_state: tuple[dict | None, list[dict]] | None = None
         self._paths: dict[str, tuple[str, list[str]] | None] = {}
         for field, _tag, _kind in INPUTS:
             raw = self._cfg(field, "")
@@ -101,6 +116,9 @@ class PivotControlApplication(Application):
     def _default_speed(self) -> float:
         return min(100.0, max(1.0, self._num("default_speed", 50.0)))
 
+    def _simple_wet(self) -> bool:
+        return bool(self._cfg("simple_wet", True))
+
     def _max_hours(self) -> float:
         return max(0.0, self._num("max_run_hours", 0.0))
 
@@ -119,7 +137,10 @@ class PivotControlApplication(Application):
     # ------------------------------------------------------------------ events
 
     async def on_deployment(self, event: DeploymentEvent):
-        await self._publish_settings(self._schedules())
+        for name in LEGACY_SCHEDULE_TAGS:
+            if self.tag_manager.get_tag(name) is not None:
+                await self.tag_manager.set_tag(name, None)
+        await self._publish_settings(*await self._load_schedules())
         await self._evaluate()
         await self._refresh_supply_pump()
 
@@ -155,9 +176,12 @@ class PivotControlApplication(Application):
             raw = model.extract_path_value(data, parsed[1])
             if raw is None:
                 continue  # this message doesn't carry it: keep the last value
-            value = (
-                model.coerce_bool(raw) if kind == "bool" else model.coerce_number(raw)
-            )
+            if kind == "object":
+                value = raw if isinstance(raw, dict) else None
+            elif kind == "bool":
+                value = model.coerce_bool(raw)
+            else:
+                value = model.coerce_number(raw)
             if value is None:
                 log.warning("%s at %s is not usable: %r", tag, ".".join(parsed[1]), raw)
                 continue
@@ -228,7 +252,7 @@ class PivotControlApplication(Application):
         )
         await self._update_pressure(running, now)
         await self._update_pending(state, direction, now)
-        await self._update_schedule_summaries(now)
+        await self._update_schedule(now)
 
     def _tag_ref(self, field: str) -> tuple[str | None, str | None]:
         """An {app_name, tag_name} config object, each part falling back to its default."""
@@ -516,37 +540,193 @@ class PivotControlApplication(Application):
         await self._set("supply_pump_warning", warning)
         await self._set("supply_pump_warning_hidden", not warning)
 
-    # ------------------------------------------------------------------ schedules
+    # ------------------------------------------------------------------ schedule
+    #
+    # The active schedule and the last five are stored in this app's Settings Channel entry
+    # (``schedule_state``), which only the schedule RPCs, completion and deployment write, and
+    # mirrored to the schedule_active / schedule_history tags the page reads. Every invocation
+    # reads the stored copy, so a concurrent invocation that wrote stale tags is put right by
+    # the next one.
 
-    def _schedules(self) -> list[dict]:
-        return model.normalise_schedules(
-            self.tags.schedules.value, self._default_speed()
-        )
-
-    @ui.handler(SCHEDULE_RE)
-    async def on_schedule_edit(self, ctx, value):
-        match = SCHEDULE_RE.match(ctx.method)
-        slot, field = int(match.group(1)), match.group(2)
-        schedules = self._schedules()
-        if not 1 <= slot <= len(schedules):
-            raise ValueError(f"no schedule slot {slot}")
-        # Raises ValueError for a bad value: the site shows the command as failed and the
-        # input keeps its previous value (auto_update only runs on success).
-        schedules[slot - 1] = model.apply_schedule_edit(
-            schedules[slot - 1], field, value
-        )
-        await self._set("schedules", schedules)
-        await self._publish_settings(schedules)
-        await self._update_schedule_summaries(model.now_ms())
-
-    async def _update_schedule_summaries(self, now: int):
-        tz = self._tz()
-        for s in self._schedules():
-            await self._set(
-                f"sched_{s['slot']}_summary", model.schedule_summary(s, tz, now)
+    async def _load_schedules(self) -> tuple[dict | None, list[dict]]:
+        if self._schedule_state is not None:
+            return self._schedule_state
+        stored = None
+        try:
+            agg = await self.api.fetch_channel_aggregate(self._settings_channel())
+            entry = (getattr(agg, "data", None) or {}).get(self.app_key)
+            stored = model.schedule_from_settings(entry)
+        except Exception as e:  # no aggregate yet, or unreadable: fall back to the tags
+            log.info("Settings not readable (%s): using the schedule tags", e)
+        if stored is None:
+            active = model._clean_schedule(self.tags.schedule_active.value)
+            stored = (
+                active if model.is_active(active) else None,
+                model.clean_history(self.tags.schedule_history.value),
             )
+        self._schedule_state = stored
+        return stored
 
-    async def _publish_settings(self, schedules: list[dict]):
+    async def _save_schedules(self, active: dict | None, history: list[dict]):
+        """Store the schedules (settings, for the edge and as the source of truth) and
+        mirror them to the tags."""
+        self._schedule_state = (active, history)
+        await self._publish_settings(active, history)
+        await self._set_schedule_tags(active, history)
+
+    async def _set_schedule_tags(
+        self, active: dict | None, history: list[dict], progress=None
+    ):
+        if active is not None:
+            if progress is None:
+                current = self.tags.schedule_active.value or {}
+                if current.get("id") == active["id"]:
+                    progress = current.get("progress")
+            active = dict(active, progress=progress)
+        await self._set("schedule_active", active)
+        await self._set("schedule_history", history)
+
+    async def _update_schedule(self, now: int):
+        """Bring the running schedule's progress up to date, and retire it once done."""
+        active, history = await self._load_schedules()
+        if active is None:
+            await self._set_schedule_tags(None, history)
+            return
+        current = self.tags.schedule_active.value or {}
+        progress = (
+            current.get("progress") if current.get("id") == active["id"] else None
+        )
+
+        status = None
+        reported = None
+        if self._paths.get("schedule_state_path"):
+            reported = model.edge_progress(
+                self.tags.edge_schedule_state.value, active, now
+            )
+        if reported is not None:
+            progress, status = reported
+            done = status in (model.SCHEDULE_COMPLETED, model.SCHEDULE_ENDED)
+        else:
+            progress, done = model.estimate_progress(
+                active, progress, self.tags.angle_deg.value, now
+            )
+            if self._cfg("demo_simulate_controller", False):
+                # Demo: the estimate stands in for the controller's report.
+                progress["estimated"] = False
+        if done:
+            await self._finish(
+                active,
+                history,
+                model.SCHEDULE_ENDED
+                if status == model.SCHEDULE_ENDED
+                else model.SCHEDULE_COMPLETED,
+                now,
+            )
+            return
+        await self._set_schedule_tags(active, history, progress)
+
+    async def _finish(self, active: dict, history: list[dict], status: str, now: int):
+        finished = model.finish_schedule(active, status, now)
+        await self._save_schedules(None, model.push_history(history, finished))
+        await self._set(
+            "last_command",
+            "Schedule completed"
+            if status == model.SCHEDULE_COMPLETED
+            else "Schedule ended",
+        )
+
+    async def _send_schedule_command(self, verb: str, params: dict):
+        """A schedule command on the Command Channel. Not tracked as pending: the reported
+        outputs can't confirm a schedule change on their own."""
+        command = model.build_command(
+            verb, self._cfg("run_target", "") or "run", self.app_key, params=params
+        )
+        await self.api.create_message(self._command_channel(), command)
+        log.info("sent %s", command)
+        return command
+
+    def _actor_name(self, ctx) -> str | None:
+        actor = (getattr(getattr(ctx, "message", None), "data", None) or {}).get(
+            "actor"
+        )
+        if isinstance(actor, dict):
+            return actor.get("name") or actor.get("email") or None
+        return None
+
+    @rpc.handler("schedule_start", channel="ui_cmds")
+    async def on_schedule_start(self, ctx, payload):
+        """Start a schedule: ``{"mode": "simple" | "detailed", "steps": [...]}``."""
+        now = model.now_ms()
+        await self._update_angle()  # where the first step starts from
+        active, history = await self._load_schedules()
+        if active is not None:
+            raise RPCError(
+                "INVALID",
+                "A schedule is already running: end it before starting another",
+            )
+        try:
+            mode, steps = model.validate_schedule(
+                payload,
+                default_speed=self._default_speed(),
+                simple_wet=self._simple_wet(),
+                max_hours=self._max_hours(),
+            )
+        except model.ScheduleInvalid as e:
+            raise RPCError("INVALID", "\n".join(e.errors)) from e
+        schedule = model.new_schedule(
+            mode, steps, now=now, started_by=self._actor_name(ctx)
+        )
+        await self._save_schedules(schedule, history)
+        progress = model.empty_progress(now, schedule, self.tags.angle_deg.value)
+        if self._cfg("demo_simulate_controller", False):
+            progress["estimated"] = False
+        await self._set_schedule_tags(schedule, history, progress)
+        pump = self._pump_with_pivot()
+        command = await self._send_schedule_command(
+            "schedule_start",
+            {
+                "schedule_id": schedule["id"],
+                "schedule": model.schedule_for_edge(schedule, pump is not None),
+                "supply_pump": pump,
+            },
+        )
+        await self._set(
+            "last_command",
+            f"Schedule started ({len(steps)} step{'s' if len(steps) != 1 else ''})",
+        )
+        return {"schedule_id": schedule["id"], "request_id": command["request_id"]}
+
+    async def _schedule_action(self, ctx, payload, verb: str):
+        now = model.now_ms()
+        active, history = await self._load_schedules()
+        wanted = (
+            (payload or {}).get("schedule_id") if isinstance(payload, dict) else None
+        )
+        if active is None or (wanted and wanted != active["id"]):
+            raise RPCError("NOT_RUNNING", "That schedule isn't running any more")
+        if verb == "schedule_pause":
+            await self._save_schedules(model.pause_schedule(active, now), history)
+        elif verb == "schedule_resume":
+            await self._save_schedules(model.resume_schedule(active, now), history)
+        else:
+            await self._finish(active, history, model.SCHEDULE_ENDED, now)
+        command = await self._send_schedule_command(verb, {"schedule_id": active["id"]})
+        await self._set("last_command", SCHEDULE_COMMANDS[verb])
+        return {"schedule_id": active["id"], "request_id": command["request_id"]}
+
+    @rpc.handler("schedule_pause", channel="ui_cmds")
+    async def on_schedule_pause(self, ctx, payload):
+        return await self._schedule_action(ctx, payload, "schedule_pause")
+
+    @rpc.handler("schedule_resume", channel="ui_cmds")
+    async def on_schedule_resume(self, ctx, payload):
+        return await self._schedule_action(ctx, payload, "schedule_resume")
+
+    @rpc.handler("schedule_end", channel="ui_cmds")
+    async def on_schedule_end(self, ctx, payload):
+        return await self._schedule_action(ctx, payload, "schedule_end")
+
+    async def _publish_settings(self, schedule: dict | None, history: list[dict]):
         if not self.app_key:
             return
         payload = model.settings_payload(
@@ -559,7 +739,8 @@ class PivotControlApplication(Application):
             default_speed=self._default_speed(),
             max_run_hours=self._max_hours(),
             tz_name=self._tz(),
-            schedules=schedules,
+            schedule=schedule,
+            history=history,
             supply_pump=self._supply_pump(),
         )
         # Replace only this app's key: other apps' settings in the aggregate are kept.

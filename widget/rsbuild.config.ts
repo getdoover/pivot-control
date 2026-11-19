@@ -16,6 +16,7 @@ const mfConfig = createModuleFederationConfig({
   },
   exposes: {
     "./PivotControlWidget": "./src/PivotControlWidget",
+    "./ScheduleWidget": "./src/ScheduleWidget",
   },
   shared: {
     react: { singleton: true, requiredVersion: "^18.3.1", eager: true },

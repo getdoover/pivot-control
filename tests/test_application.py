@@ -204,31 +204,6 @@ async def test_low_pressure_after_start_delay(harness):
     assert len(harness.notifications.sent) == 1
 
 
-async def test_schedule_edit_publishes_settings(harness):
-    app = await harness.app()
-    ctx = NS(method="sched_2_enabled")
-    await app.on_schedule_edit(ctx, True)
-    channel, data, kwargs = harness.api.aggregates[-1]
-    assert channel == "control_settings"
-    assert kwargs["replace_keys"] == [APP_KEY]
-    settings = data[APP_KEY]
-    assert settings["app"] == "pivot_control"
-    assert settings["targets"] == {
-        "run": "run",
-        "forward": "forward",
-        "reverse": "reverse",
-    }
-    assert settings["percent_timer_cycle_s"] == 60
-    assert settings["schedules"][1]["enabled"] is False  # no start time yet
-    assert app.tags.sched_2_summary.value == "Not set: no start time"
-
-    app = await harness.app()
-    await app.on_schedule_edit(NS(method="sched_2_start"), 1795118400000)
-    settings = harness.api.aggregates[-1][1][APP_KEY]
-    assert settings["schedules"][1]["enabled"] is True
-    assert settings["schedules"][1]["start_local"] == "2026-11-20T06:00:00+10:00"
-
-
 async def test_deployment_publishes_settings(harness):
     app = await harness.app()
     await app.on_deployment(None)
@@ -338,7 +313,7 @@ async def test_no_supply_pump_configured():
     app = await h.app()
     await app.on_deployment(None)
     assert app.ui.supply_pump.hidden is True
-    assert h.api.fetched == []
+    assert [f for f in h.api.fetched if f[0] is not None] == []  # no other device read
     settings = h.api.aggregates[-1][1][APP_KEY]
     assert settings["supply_pump"] is None
     await app.on_start(None, None)
@@ -408,7 +383,7 @@ async def test_incomplete_supply_pump_link_warns_and_is_not_commanded():
     h = Harness(config=config)
     app = await pump_app(h)
     await app.on_deployment(None)
-    assert h.api.fetched == []
+    assert [f for f in h.api.fetched if f[0] is not None] == []  # pump not read
     assert "Supply Pump App Key" in app.tags.supply_pump_warning.value
     assert app.tags.supply_pump_state.value == "Unknown"
     await app.on_start(None, None)

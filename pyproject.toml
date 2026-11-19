@@ -1,6 +1,6 @@
 [project]
 name = "pivot-control"
-version = "0.1.0"
+version = "0.2.0"
 description = "Remote control and monitoring of a centre-pivot irrigator through an edge controller"
 readme = "README.md"
 requires-python = ">=3.11"

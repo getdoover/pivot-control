@@ -2,7 +2,7 @@
 
 Inputs arrive as raw signals at configured message paths (``$channel.path``); commands go out
 as messages on the Command Channel; the settings the edge enforces (defaults, limits and the
-schedules) go to the Settings Channel aggregate under the app's key. See README.md.
+running schedule) go to the Settings Channel aggregate under the app's key. See README.md.
 """
 
 from __future__ import annotations
@@ -11,11 +11,9 @@ import math
 import re
 import time
 import uuid
-from datetime import UTC, datetime
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-SETTINGS_SCHEMA = 1
+SETTINGS_SCHEMA = 2
 APP_NAME = "pivot_control"
 
 FORWARD = "forward"
@@ -31,8 +29,6 @@ END_UNTIL_STOPPED = "until_stopped"
 END_AT_ANGLE = "stop_at_angle"
 END_AFTER_TIME = "run_for_hours"
 END_MODES = (END_UNTIL_STOPPED, END_AT_ANGLE, END_AFTER_TIME)
-
-SCHEDULE_SLOTS = 4
 
 # A loop current this fraction of the input span below the minimum input (under 1 mA on
 # 4-20 mA) is a dead loop, not a low reading (same rule as Analog Level Sensor).
@@ -366,136 +362,476 @@ def reply_text(reply: dict, label: str) -> str:
 
 
 # --------------------------------------------------------------------------- schedules
+#
+# A schedule is a one-off plan for one run of the pivot: an ordered list of steps, each a
+# direction, wet (supply pump on) or dry, a speed and an end (a stop angle or a run time),
+# with an optional start delay. A Simple schedule is one step to an angle at the configured
+# speed and wet setting. The edge runs it; this app keeps the operator's side of it (start,
+# pause, resume, end) and, until the edge reports its own progress, estimates it.
 
-SCHEDULE_FIELDS = (
-    "enabled",
-    "start",
-    "direction",
-    "speed",
-    "end",
-    "stop_angle",
-    "hours",
-)
+SIMPLE = "simple"
+DETAILED = "detailed"
+SCHEDULE_MODES = (SIMPLE, DETAILED)
+
+END_ANGLE = "angle"
+END_TIME = "time"
+STEP_ENDS = (END_ANGLE, END_TIME)
+
+SCHEDULE_RUNNING = "running"
+SCHEDULE_PAUSED = "paused"
+SCHEDULE_COMPLETED = "completed"
+SCHEDULE_ENDED = "ended"
+
+HISTORY_LENGTH = 5
+MAX_STEPS = 50
+
+# An angle step counts as reached this close to its stop angle (GPS jitter).
+ANGLE_TOLERANCE_DEG = 1.0
 
 
-def empty_schedule(slot: int, default_speed: float) -> dict:
+class ScheduleInvalid(ValueError):
+    """A schedule that can't run. ``errors`` are the operator-facing messages, one per problem."""
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("\n".join(errors))
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def normalise_step(raw: Any) -> dict:
+    """A step as sent by the page, with every key present (values are not checked here)."""
+    raw = raw if isinstance(raw, dict) else {}
+    direction = str(raw.get("direction") or "").strip().lower() or None
+    end = str(raw.get("end") or "").strip().lower() or None
+    wet = raw.get("wet")
     return {
-        "slot": slot,
-        "enabled": False,
-        "start_ts": None,
-        "direction": FORWARD,
-        "speed_percent": default_speed,
-        "end_mode": END_UNTIL_STOPPED,
-        "stop_angle_deg": None,
-        "run_hours": None,
+        "direction": direction,
+        "wet": bool(coerce_bool(wet)) if wet is not None else True,
+        "speed_percent": None
+        if _blank(raw.get("speed_percent"))
+        else coerce_number(raw.get("speed_percent")),
+        "end": end,
+        "stop_angle_deg": None
+        if _blank(raw.get("stop_angle_deg"))
+        else coerce_number(raw.get("stop_angle_deg")),
+        "run_hours": None
+        if _blank(raw.get("run_hours"))
+        else coerce_number(raw.get("run_hours")),
+        "delay_min": None
+        if _blank(raw.get("delay_min"))
+        else coerce_number(raw.get("delay_min")),
+        # Kept so a value typed but not a number is reported, not silently dropped.
+        "_bad": [
+            k
+            for k in ("speed_percent", "stop_angle_deg", "run_hours", "delay_min")
+            if not _blank(raw.get(k)) and coerce_number(raw.get(k)) is None
+        ],
     }
 
 
-def normalise_schedules(value: Any, default_speed: float) -> list[dict]:
-    """Exactly SCHEDULE_SLOTS slots, whatever the tag held."""
-    by_slot = {}
-    for item in value if isinstance(value, list) else []:
-        if isinstance(item, dict) and isinstance(item.get("slot"), int):
-            by_slot[item["slot"]] = item
-    out = []
-    for slot in range(1, SCHEDULE_SLOTS + 1):
-        base = empty_schedule(slot, default_speed)
-        base.update({k: v for k, v in (by_slot.get(slot) or {}).items() if k in base})
-        out.append(base)
-    return out
-
-
-def apply_schedule_edit(schedule: dict, field: str, value: Any) -> dict:
-    """A schedule slot with one operator edit applied. Raises ValueError for a bad value."""
-    s = dict(schedule)
-    if field == "enabled":
-        s["enabled"] = bool(coerce_bool(value))
-    elif field == "start":
-        number = coerce_number(value)
-        s["start_ts"] = int(number) if number is not None else None
-    elif field == "direction":
-        direction = str(value or "").lower()
-        if direction not in DIRECTIONS:
-            raise ValueError("direction must be forward or reverse")
-        s["direction"] = direction
-    elif field == "speed":
-        s["speed_percent"] = validate_speed(value, s.get("speed_percent") or 50.0)
-    elif field == "end":
-        if value not in END_MODES:
-            raise ValueError(f"unknown end mode {value!r}")
-        s["end_mode"] = value
-    elif field == "stop_angle":
-        s["stop_angle_deg"] = None if value in (None, "") else validate_angle(value)
-    elif field == "hours":
-        s["run_hours"] = None if value in (None, "") else validate_hours(value, 0)
+def step_errors(step: dict, max_hours: float = 0.0) -> list[str]:
+    """What's wrong with one step, as messages the operator can act on (empty when valid)."""
+    errors = []
+    bad = step.get("_bad") or []
+    if step.get("direction") not in DIRECTIONS:
+        errors.append("Choose a direction (forward or reverse)")
+    speed = step.get("speed_percent")
+    if "speed_percent" in bad or speed is None or not 1.0 <= speed <= 100.0:
+        errors.append("Speed must be 1–100 %")
+    end = step.get("end")
+    angle = step.get("stop_angle_deg")
+    hours = step.get("run_hours")
+    if end == END_ANGLE:
+        if "stop_angle_deg" in bad or (angle is not None and not 0.0 <= angle <= 360.0):
+            errors.append("Stop angle must be 0–360°")
+        elif angle is None:
+            errors.append("Choose a stop angle or a run time")
+    elif end == END_TIME:
+        if "run_hours" in bad:
+            errors.append("Run time must be a number of hours")
+        elif hours is None:
+            errors.append("Choose a stop angle or a run time")
+        elif hours <= 0:
+            errors.append("Run time must be more than 0")
+        elif max_hours and hours > max_hours:
+            errors.append(f"Run time can't be over the {max_hours:g} h maximum")
     else:
-        raise ValueError(f"unknown schedule field {field!r}")
-    return s
+        errors.append("Choose a stop angle or a run time")
+    delay = step.get("delay_min")
+    if "delay_min" in bad:
+        errors.append("Start delay must be a number of minutes")
+    elif delay is not None and delay < 0:
+        errors.append("Start delay can't be negative")
+    return errors
 
 
-def schedule_problem(s: dict) -> str | None:
-    """Why an enabled schedule can't run, or None."""
-    if s.get("start_ts") is None:
-        return "no start time"
-    if s.get("end_mode") == END_AT_ANGLE and s.get("stop_angle_deg") is None:
-        return "no stop angle"
-    if s.get("end_mode") == END_AFTER_TIME and not s.get("run_hours"):
-        return "no run time"
-    return None
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:]
 
 
-def local_time(ts_ms: int | None, tz_name: str) -> datetime | None:
-    if ts_ms is None:
-        return None
-    return datetime.fromtimestamp(ts_ms / 1000, tz=UTC).astimezone(_zone(tz_name))
-
-
-def _zone(tz_name: str) -> ZoneInfo:
-    try:
-        return ZoneInfo(tz_name or "Australia/Brisbane")
-    except (ValueError, ZoneInfoNotFoundError):
-        return ZoneInfo("Australia/Brisbane")
-
-
-def schedule_for_edge(s: dict, tz_name: str, max_hours: float) -> dict:
-    """One schedule as the edge runs it: the start command's fields, plus when."""
-    start = local_time(s.get("start_ts"), tz_name)
-    duration_s = None
-    if s.get("end_mode") == END_AFTER_TIME and s.get("run_hours"):
-        hours = float(s["run_hours"])
-        if max_hours:
-            hours = min(hours, max_hours)
-        duration_s = round(hours * 3600)
-    problem = schedule_problem(s)
+def clean_step(step: dict) -> dict:
+    """A valid step in its stored form: only the fields its end uses, numbers rounded."""
+    end = step["end"]
     return {
-        "slot": s["slot"],
-        "enabled": bool(s.get("enabled")) and problem is None,
-        "start_ts": s.get("start_ts"),
-        "start_local": start.isoformat() if start else None,
-        "direction": s.get("direction") or FORWARD,
-        "speed_percent": s.get("speed_percent"),
-        "stop_angle_deg": s.get("stop_angle_deg")
-        if s.get("end_mode") == END_AT_ANGLE
+        "direction": step["direction"],
+        "wet": bool(step["wet"]),
+        "speed_percent": round(float(step["speed_percent"]), 1),
+        "end": end,
+        "stop_angle_deg": round(float(step["stop_angle_deg"]) % 360.0, 1)
+        if end == END_ANGLE
         else None,
-        "duration_s": duration_s,
+        "run_hours": round(float(step["run_hours"]), 3) if end == END_TIME else None,
+        "delay_min": round(float(step["delay_min"] or 0), 1),
     }
 
 
-def schedule_summary(s: dict, tz_name: str, now: int | None = None) -> str:
-    if not s.get("enabled"):
-        return "Off"
-    problem = schedule_problem(s)
-    if problem:
-        return f"Not set: {problem}"
-    start = local_time(s["start_ts"], tz_name)
-    text = f"{start:%a %d %b %H:%M}, {str(s.get('direction')).capitalize()} {s.get('speed_percent'):g} %"
-    if s.get("end_mode") == END_AT_ANGLE:
-        text += f", to {s['stop_angle_deg']:g}°"
-    elif s.get("end_mode") == END_AFTER_TIME:
-        text += f", {float(s['run_hours']):g} h"
-    if s["start_ts"] < (now if now is not None else now_ms()):
-        text += " (past)"
-    return text
+def validate_schedule(
+    payload: Any,
+    *,
+    default_speed: float,
+    simple_wet: bool,
+    max_hours: float = 0.0,
+) -> tuple[str, list[dict]]:
+    """(mode, steps) from the page's request. Raises ScheduleInvalid with every problem.
+
+    A Simple schedule is one step to an angle; its speed and wet setting always come from
+    config, whatever the request says."""
+    payload = payload if isinstance(payload, dict) else {}
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in SCHEDULE_MODES:
+        raise ScheduleInvalid(["Unknown schedule type: choose Simple or Detailed"])
+    raw_steps = payload.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise ScheduleInvalid(["Add at least one step"])
+    if mode == SIMPLE:
+        raw_steps = [
+            dict(
+                raw_steps[0] if isinstance(raw_steps[0], dict) else {},
+                speed_percent=default_speed,
+                wet=simple_wet,
+                end=END_ANGLE,
+                run_hours=None,
+                delay_min=None,
+            )
+        ]
+    if len(raw_steps) > MAX_STEPS:
+        raise ScheduleInvalid([f"A schedule can have at most {MAX_STEPS} steps"])
+    steps = [normalise_step(s) for s in raw_steps]
+    errors = []
+    for n, step in enumerate(steps, start=1):
+        for problem in step_errors(step, max_hours):
+            errors.append(
+                problem if mode == SIMPLE else f"Step {n}: {_lower_first(problem)}"
+            )
+    if errors:
+        raise ScheduleInvalid(errors)
+    return mode, [clean_step(s) for s in steps]
+
+
+def new_schedule(
+    mode: str,
+    steps: list[dict],
+    *,
+    now: int,
+    started_by: str | None = None,
+    schedule_id: str | None = None,
+) -> dict:
+    """A schedule as stored, running from ``now``. Every key is always present."""
+    return {
+        "id": schedule_id or str(uuid.uuid4()),
+        "mode": mode,
+        "steps": steps,
+        "status": SCHEDULE_RUNNING,
+        "paused": False,
+        "started_ts": now,
+        "started_by": started_by,
+        "paused_ts": None,  # when the current pause began
+        "paused_ms": 0,  # total of finished pauses
+        "ended_ts": None,
+    }
+
+
+def _clean_schedule(value: Any) -> dict | None:
+    """A stored schedule, or None when it isn't one (keys outside the stored set dropped)."""
+    if not isinstance(value, dict) or not value.get("id"):
+        return None
+    if not isinstance(value.get("steps"), list):
+        return None
+    base = new_schedule(
+        value.get("mode") or DETAILED,
+        value["steps"],
+        now=int(value.get("started_ts") or 0),
+        schedule_id=str(value["id"]),
+    )
+    base.update({k: value[k] for k in base if k in value})
+    return base
+
+
+def is_active(schedule: dict | None) -> bool:
+    return bool(schedule) and schedule.get("status") in (
+        SCHEDULE_RUNNING,
+        SCHEDULE_PAUSED,
+    )
+
+
+def pause_schedule(schedule: dict, now: int) -> dict:
+    if schedule.get("paused"):
+        return schedule
+    return dict(schedule, status=SCHEDULE_PAUSED, paused=True, paused_ts=now)
+
+
+def resume_schedule(schedule: dict, now: int) -> dict:
+    if not schedule.get("paused"):
+        return schedule
+    paused_for = max(0, now - int(schedule.get("paused_ts") or now))
+    return dict(
+        schedule,
+        status=SCHEDULE_RUNNING,
+        paused=False,
+        paused_ts=None,
+        paused_ms=int(schedule.get("paused_ms") or 0) + paused_for,
+    )
+
+
+def finish_schedule(schedule: dict, status: str, now: int) -> dict:
+    """The schedule as history keeps it: completed (its last step done) or ended (by hand)."""
+    finished = resume_schedule(schedule, now)
+    return dict(finished, status=status, paused=False, ended_ts=now)
+
+
+def push_history(history: Any, schedule: dict) -> list[dict]:
+    """The newest HISTORY_LENGTH schedules, newest first, each once."""
+    items = [
+        s for s in (history if isinstance(history, list) else []) if isinstance(s, dict)
+    ]
+    items = [s for s in items if s.get("id") != schedule.get("id")]
+    return [schedule, *items][:HISTORY_LENGTH]
+
+
+def clean_history(history: Any) -> list[dict]:
+    out = []
+    for item in history if isinstance(history, list) else []:
+        s = _clean_schedule(item)
+        if s and all(o["id"] != s["id"] for o in out):
+            out.append(s)
+    return out[:HISTORY_LENGTH]
+
+
+def paused_ms_at(schedule: dict, now: int) -> int:
+    """Total time paused up to ``now``, including a pause still going."""
+    total = int(schedule.get("paused_ms") or 0)
+    if schedule.get("paused") and schedule.get("paused_ts"):
+        total += max(0, now - int(schedule["paused_ts"]))
+    return total
+
+
+# --------------------------------------------------------------------------- progress
+#
+# The cloud's estimate of where a running schedule is, kept with the active schedule as
+# ``progress``. The current step started at ``step_started_ts``; time spent paused since
+# (``paused_ms_at(now) - paused_ms_at_step``) doesn't count. A step first waits out its start
+# delay; then a time step runs its run time, and an angle step runs until the pivot has
+# turned, in the step's direction, from where it was when the step began to the stop angle.
+# The turn is accumulated from each reading's signed change, so GPS jitter cancels out and a
+# run through North (359° -> 0°) counts as moving on.
+
+
+def empty_progress(now: int, schedule: dict, angle: float | None) -> dict:
+    return {
+        "step_index": 0,
+        "step_started_ts": now,
+        "paused_ms_at_step": paused_ms_at(schedule, now),
+        "start_angle_deg": angle,
+        "last_angle_deg": angle,
+        "turned_deg": 0.0,
+        "waiting": False,
+        "fraction": 0.0,
+        "remaining_deg": None,
+        "remaining_s": None,
+        "estimated": True,
+        "updated_ts": now,
+    }
+
+
+def angle_needed(start: float, stop: float, direction: str) -> float:
+    """Degrees the pivot turns from ``start`` to ``stop`` in ``direction`` (forward = clockwise)."""
+    if direction == REVERSE:
+        return (start - stop) % 360.0
+    return (stop - start) % 360.0
+
+
+def signed_turn(previous: float, current: float, direction: str) -> float:
+    """The change from one angle reading to the next, positive in the step's direction."""
+    delta = (current - previous + 180.0) % 360.0 - 180.0
+    return -delta if direction == REVERSE else delta
+
+
+def estimate_progress(
+    schedule: dict, progress: dict | None, angle: float | None, now: int
+) -> tuple[dict, bool]:
+    """(progress, done): the estimate brought up to ``now``. ``done`` once the last step is."""
+    steps = schedule.get("steps") or []
+    if not steps:
+        return empty_progress(now, schedule, angle), True
+    if not isinstance(progress, dict) or "step_index" not in progress:
+        progress = empty_progress(
+            int(schedule.get("started_ts") or now), schedule, angle
+        )
+    p = dict(progress)
+    if schedule.get("paused"):
+        return p, False
+    paused_now = paused_ms_at(schedule, now)
+
+    while True:
+        index = int(p.get("step_index") or 0)
+        if index >= len(steps):
+            return p, True
+        step = steps[index]
+        active_ms = max(
+            0,
+            now
+            - int(p.get("step_started_ts") or now)
+            - (paused_now - int(p.get("paused_ms_at_step") or 0)),
+        )
+        delay_ms = float(step.get("delay_min") or 0) * 60_000
+        if active_ms < delay_ms:
+            p.update(
+                waiting=True,
+                fraction=0.0,
+                remaining_s=round((delay_ms - active_ms) / 1000),
+                remaining_deg=None,
+                last_angle_deg=angle if angle is not None else p.get("last_angle_deg"),
+                start_angle_deg=angle
+                if angle is not None
+                else p.get("start_angle_deg"),
+                turned_deg=0.0,
+                updated_ts=now,
+            )
+            return p, False
+
+        finished_at = None
+        if step.get("end") == END_TIME:
+            run_ms = float(step.get("run_hours") or 0) * 3_600_000
+            ran_ms = active_ms - delay_ms
+            p.update(
+                waiting=False,
+                fraction=min(1.0, ran_ms / run_ms) if run_ms else 1.0,
+                remaining_s=max(0, round((run_ms - ran_ms) / 1000)),
+                remaining_deg=None,
+            )
+            if ran_ms >= run_ms:
+                finished_at = int(now - (ran_ms - run_ms))
+        else:
+            start = p.get("start_angle_deg")
+            last = p.get("last_angle_deg")
+            turned = float(p.get("turned_deg") or 0.0)
+            if start is None:
+                start = last = angle  # first reading of this step
+            elif angle is not None and last is not None:
+                turned = max(0.0, turned + signed_turn(last, angle, step["direction"]))
+            if angle is not None:
+                last = angle
+            p.update(
+                start_angle_deg=start, last_angle_deg=last, turned_deg=round(turned, 2)
+            )
+            if start is None:
+                p.update(
+                    waiting=False, fraction=None, remaining_deg=None, remaining_s=None
+                )
+            else:
+                need = angle_needed(
+                    start, float(step["stop_angle_deg"]), step["direction"]
+                )
+                p.update(
+                    waiting=False,
+                    fraction=1.0
+                    if need <= ANGLE_TOLERANCE_DEG
+                    else min(1.0, turned / need),
+                    remaining_deg=round(max(0.0, need - turned), 1),
+                    remaining_s=None,
+                )
+                if need - turned <= ANGLE_TOLERANCE_DEG:
+                    finished_at = now
+        p["updated_ts"] = now
+        if finished_at is None:
+            return p, False
+        # Next step, from where this one finished.
+        p.update(
+            step_index=index + 1,
+            step_started_ts=finished_at,
+            paused_ms_at_step=paused_now,
+            start_angle_deg=angle,
+            last_angle_deg=angle,
+            turned_deg=0.0,
+            fraction=0.0,
+        )
+
+
+def edge_progress(
+    reported: Any, schedule: dict, now: int
+) -> tuple[dict, str | None] | None:
+    """Progress as the edge reports it, with its status, or None when it reports nothing
+    usable for this schedule.
+
+    The edge publishes ``{"schedule_id", "step_index", "step_progress", "status"}`` at the
+    configured Schedule State Path; ``schedule_id`` and ``step_progress`` are optional."""
+    if not isinstance(reported, dict):
+        return None
+    sid = reported.get("schedule_id")
+    if sid and sid != schedule.get("id"):
+        return None
+    index = coerce_number(reported.get("step_index"))
+    if index is None:
+        return None
+    fraction = coerce_number(reported.get("step_progress"))
+    status = str(reported.get("status") or "").lower() or None
+    progress = empty_progress(now, schedule, None)
+    progress.update(
+        step_index=int(index),
+        fraction=None if fraction is None else max(0.0, min(1.0, fraction)),
+        waiting=status == "waiting",
+        estimated=False,
+        step_started_ts=None,
+        paused_ms_at_step=None,
+    )
+    return progress, status
+
+
+# --------------------------------------------------------------------------- settings
+
+
+def step_for_edge(step: dict, pump_linked: bool) -> dict:
+    """One step as the edge runs it: the start command's fields, plus wet and delay."""
+    return {
+        "direction": step["direction"],
+        "speed_percent": step["speed_percent"],
+        "stop_angle_deg": step["stop_angle_deg"] if step["end"] == END_ANGLE else None,
+        "duration_s": round(float(step["run_hours"]) * 3600)
+        if step["end"] == END_TIME
+        else None,
+        "delay_s": round(float(step.get("delay_min") or 0) * 60),
+        "wet": bool(step["wet"]),
+        # The edge runs the supply pump through a wet step and stops it for a dry one.
+        "supply_pump_on": bool(step["wet"]) and pump_linked,
+    }
+
+
+def schedule_for_edge(schedule: dict | None, pump_linked: bool) -> dict | None:
+    if not schedule:
+        return None
+    return {
+        "id": schedule["id"],
+        "mode": schedule["mode"],
+        "status": schedule["status"],
+        "paused": bool(schedule.get("paused")),
+        "started_ts": schedule.get("started_ts"),
+        "paused_ts": schedule.get("paused_ts"),
+        "paused_ms": schedule.get("paused_ms") or 0,
+        "steps": [step_for_edge(s, pump_linked) for s in schedule.get("steps") or []],
+    }
 
 
 def settings_payload(
@@ -505,11 +841,17 @@ def settings_payload(
     default_speed: float,
     max_run_hours: float,
     tz_name: str,
-    schedules: list[dict],
+    schedule: dict | None,
+    history: list[dict],
     supply_pump: dict | None = None,
     ts: int | None = None,
 ) -> dict:
     """This app's entry in the Settings Channel aggregate (under its app key)."""
+    pump_linked = bool(
+        supply_pump
+        and not supply_pump_problem(supply_pump)
+        and supply_pump["start_with_pivot"]
+    )
     return {
         "app": APP_NAME,
         "schema": SETTINGS_SCHEMA,
@@ -518,10 +860,36 @@ def settings_payload(
         "default_speed_percent": default_speed,
         "max_run_s": round(max_run_hours * 3600) if max_run_hours else None,
         "timezone": tz_name,
-        "schedules": [schedule_for_edge(s, tz_name, max_run_hours) for s in schedules],
+        "schedule": schedule_for_edge(schedule, pump_linked),
+        # The operator's side of the schedules, as stored: the page's source of truth.
+        "schedule_state": {"active": schedule, "history": history},
         "supply_pump": supply_pump,
         "updated_ts": ts if ts is not None else now_ms(),
     }
+
+
+def schedule_from_settings(entry: Any) -> tuple[dict | None, list[dict]] | None:
+    """(active, history) from this app's settings entry, or None when it has none stored."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("schedule_state"), dict):
+        return None
+    state = entry["schedule_state"]
+    active = _clean_schedule(state.get("active"))
+    return (active if is_active(active) else None), clean_history(state.get("history"))
+
+
+def step_text(step: dict) -> str:
+    """One step in words, e.g. 'Forward, wet, 50 %, to 180°, after 15 min'."""
+    text = (
+        f"{str(step.get('direction') or '').capitalize()}, "
+        f"{'wet' if step.get('wet') else 'dry'}, {float(step.get('speed_percent') or 0):g} %"
+    )
+    if step.get("end") == END_TIME:
+        text += f", for {float(step.get('run_hours') or 0):g} h"
+    else:
+        text += f", to {float(step.get('stop_angle_deg') or 0):g}°"
+    if step.get("delay_min"):
+        text += f", after {float(step['delay_min']):g} min"
+    return text
 
 
 # --------------------------------------------------------------------------- supply pump

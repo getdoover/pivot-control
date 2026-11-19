@@ -22,38 +22,6 @@ ANGLE_RANGES = [
 ]
 
 
-def _schedule_slot(n: int) -> ui.Submodule:
-    p = f"sched_{n}_"
-    return ui.Submodule(
-        f"Schedule {n}",
-        name=f"schedule_{n}",
-        # Nested elements aren't tag-bound by the declarative UI, so reference the tag by name.
-        status=ui.tag_ref(f"sched_{n}_summary", "string", "Off"),
-        is_collapsed=True,
-        children=[
-            ui.Switch("Enabled", name=p + "enabled"),
-            ui.DatetimeInput("Start", name=p + "start", pickers=["date", "time"]),
-            ui.Select(
-                "Direction",
-                name=p + "direction",
-                options=DIRECTION_OPTIONS,
-                default=model.FORWARD,
-            ),
-            ui.FloatInput("Speed", name=p + "speed", units="%", min_val=1, max_val=100),
-            ui.Select(
-                "End",
-                name=p + "end",
-                options=END_OPTIONS,
-                default=model.END_UNTIL_STOPPED,
-            ),
-            ui.FloatInput(
-                "Stop Angle", name=p + "stop_angle", units="°", min_val=0, max_val=360
-            ),
-            ui.FloatInput("Run Time", name=p + "hours", units="h", min_val=0),
-        ],
-    )
-
-
 class PivotControlUI(ui.UI):
     command_warning = ui.WarningIndicator(
         T.command_message,
@@ -198,17 +166,17 @@ class PivotControlUI(ui.UI):
         ],
     )
 
-    schedules = ui.Submodule(
-        "Schedules",
-        name="schedules",
+    # The schedule: the running one with its steps and progress, Pause / Resume / End, or
+    # Create Schedule (Simple, Detailed or from Past Schedules). It talks to this app through
+    # the schedule_* RPCs on ui_cmds and reads the schedule_active / schedule_history tags.
+    schedule = ui.RemoteComponent(
+        name="schedule",
+        display_name="Schedule",
+        component_url="$config.app().dv_widget_url",
+        scope="PivotControlWidget",
+        module="./ScheduleWidget",
+        app_key="$config.app().APP_KEY",
         position=30,
-        is_collapsed=True,
-        children=[
-            _schedule_slot(1),
-            _schedule_slot(2),
-            _schedule_slot(3),
-            _schedule_slot(4),
-        ],
     )
 
     async def setup(self):
@@ -249,9 +217,9 @@ class PivotControlUI(ui.UI):
         max_hours = float(cfg.max_run_hours.value or 0)
         default_speed = float(cfg.default_speed.value or 50)
         for name, element in self.get_interactions().items():
-            if name == "start_speed" or name.endswith("_speed"):
+            if name == "start_speed":
                 _set_default(element, default_speed)
-            if max_hours and (name == "start_hours" or name.endswith("_hours")):
+            if max_hours and name == "start_hours":
                 element.max = max_hours
 
 
