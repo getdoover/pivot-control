@@ -121,9 +121,11 @@ class PivotControlApplication(Application):
     async def on_deployment(self, event: DeploymentEvent):
         await self._publish_settings(self._schedules())
         await self._evaluate()
+        await self._refresh_supply_pump()
 
     async def on_schedule(self, event: ScheduleEvent):
         await self._evaluate()
+        await self._refresh_supply_pump()
 
     async def on_aggregate_update(self, event: AggregateUpdateEvent):
         # tag_values only (pre_hook_filter); the angle is re-read in _evaluate. Only the
@@ -411,20 +413,108 @@ class PivotControlApplication(Application):
             await self._set("command_message", f"Start not sent: {e}")
             await self._set("command_warning_hidden", False)
             return {"sent": False, "error": str(e)}
+        pump = self._pump_with_pivot()
+        if pump:
+            params["supply_pump"] = pump
         target = self._cfg("run_target", "") or "run"
         command = model.build_command(
             "start", target, self.app_key, params=params, duration_s=duration_s
         )
         await self._set("started_speed", params["speed_percent"])
         await self._send(command)
+        await self._refresh_supply_pump()
         return {"sent": True, "request_id": command["request_id"]}
 
     @ui.handler("stop", auto_update=False)
     async def on_stop(self, ctx, _value):
         target = self._cfg("run_target", "") or "run"
-        command = model.build_command("stop", target, self.app_key)
+        pump = self._pump_with_pivot()
+        command = model.build_command(
+            "stop", target, self.app_key, params={"supply_pump": pump} if pump else None
+        )
         await self._send(command)
+        await self._refresh_supply_pump()
         return {"sent": True, "request_id": command["request_id"]}
+
+    # ------------------------------------------------------------------ supply pump
+
+    def _supply_pump(self) -> dict | None:
+        """The configured supply pump link, or None when none is set."""
+        return model.supply_pump_link(
+            self._cfg("supply_pump_device"),
+            self._cfg("supply_pump_app_key"),
+            self._cfg("supply_pump_target"),
+            with_pivot=self._cfg("supply_pump_with_pivot", True),
+            lead_s=self._cfg("supply_pump_lead_s", 0),
+            run_on_s=self._cfg("supply_pump_run_on_s", 0),
+        )
+
+    def _pump_with_pivot(self) -> dict | None:
+        """The link to put in a start / stop command: complete and following the pivot."""
+        link = self._supply_pump()
+        if not link or model.supply_pump_problem(link) or not link["start_with_pivot"]:
+            return None
+        return link
+
+    def _device_name(self, device_id) -> str:
+        config = getattr(self, "received_deployment_config", None) or {}
+        entry = (config.get("DEVICE_MAP") or {}).get(str(device_id)) or {}
+        return entry.get("display_name") or entry.get("name") or f"device {device_id}"
+
+    async def _refresh_supply_pump(self):
+        """Read the supply pump's state from its Pump Control install's tags on its device.
+
+        Anything not read (no link, no permission, nothing reported) shows as Unknown with
+        the reason, never as Stopped.
+        """
+        link = self._supply_pump()
+        await self._set("supply_pump_mode", model.supply_pump_mode_text(link))
+        if not link:
+            for name, value in (
+                ("supply_pump_name", None),
+                ("supply_pump_state", model.PUMP_UNKNOWN),
+                ("supply_pump_running", None),
+                ("supply_pump_warning", ""),
+                ("supply_pump_warning_hidden", True),
+            ):
+                await self._set(name, value)
+            return
+
+        warning = model.supply_pump_problem(link) or ""
+        device_id, app_key, target = link["device_id"], link["app_key"], link["target"]
+        device = self._device_name(device_id) if device_id else None
+        state = model.supply_pump_state(None, target or "")
+        if not warning:
+            try:
+                agg = await self.api.fetch_channel_aggregate(
+                    "tag_values", agent_id=int(device_id)
+                )
+                tags = (getattr(agg, "data", None) or {}).get(app_key) or {}
+            except Exception as e:
+                log.warning("Can't read tag_values on %s: %s", device_id, e)
+                warning = (
+                    f"Can't read the supply pump on {device}: add it under Devices in "
+                    "this app's config"
+                )
+            else:
+                state = model.supply_pump_state(tags, target)
+                await self._set("supply_pump_checked", model.now_ms())
+                if not tags:
+                    warning = (
+                        f"The supply pump on {device} has reported nothing yet "
+                        f"(app {app_key})"
+                    )
+
+        name = state["name"] or target or "pump"
+        await self._set("supply_pump_name", f"{device}: {name}" if device else name)
+        await self._set("supply_pump_running", state["running"])
+        await self._set("supply_pump_state", state["state"])
+        if state["last_started"] is not None:
+            await self._set("supply_pump_last_started", state["last_started"])
+        if state["last_stopped"] is not None:
+            await self._set("supply_pump_last_stopped", state["last_stopped"])
+        await self._set("supply_pump_warning", warning)
+        await self._set("supply_pump_warning_hidden", not warning)
 
     # ------------------------------------------------------------------ schedules
 
@@ -470,6 +560,7 @@ class PivotControlApplication(Application):
             max_run_hours=self._max_hours(),
             tz_name=self._tz(),
             schedules=schedules,
+            supply_pump=self._supply_pump(),
         )
         # Replace only this app's key: other apps' settings in the aggregate are kept.
         await self.api.update_channel_aggregate(

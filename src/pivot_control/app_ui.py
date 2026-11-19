@@ -116,6 +116,54 @@ class PivotControlUI(ui.UI):
         "Last Command", value=T.last_command, name="last_command", position=18
     )
 
+    # The pump on another device that supplies the water (only when one is linked). Nested
+    # elements reference their tags by name.
+    supply_pump_warning = ui.WarningIndicator(
+        T.supply_pump_warning,
+        name="supply_pump_warning",
+        hidden=T.supply_pump_warning_hidden,
+        can_cancel=False,
+        position=4,
+    )
+    supply_pump = ui.Submodule(
+        "Supply Pump",
+        name="supply_pump",
+        status=ui.tag_ref("supply_pump_state", "string", "Unknown"),
+        position=19,
+        children=[
+            ui.TextVariable(
+                "Pump",
+                name="supply_pump_name",
+                value=ui.tag_ref("supply_pump_name", "string", "Not read yet"),
+            ),
+            ui.TextVariable(
+                "State",
+                name="supply_pump_state",
+                value=ui.tag_ref("supply_pump_state", "string", "Unknown"),
+            ),
+            ui.Timestamp(
+                "Last Started",
+                name="supply_pump_last_started",
+                value=ui.tag_ref("supply_pump_last_started", "number"),
+            ),
+            ui.Timestamp(
+                "Last Stopped",
+                name="supply_pump_last_stopped",
+                value=ui.tag_ref("supply_pump_last_stopped", "number"),
+            ),
+            ui.TextVariable(
+                "With Pivot",
+                name="supply_pump_mode",
+                value=ui.tag_ref("supply_pump_mode", "string"),
+            ),
+            ui.Timestamp(
+                "State Read",
+                name="supply_pump_checked",
+                value=ui.tag_ref("supply_pump_checked", "number"),
+            ),
+        ],
+    )
+
     control = ui.Submodule(
         "Control",
         name="control",
@@ -183,6 +231,19 @@ class PivotControlUI(ui.UI):
                 and cfg.pivot_centre_lon.value is not None
             )
         self.angle.hidden = not has_angle
+        has_pump = False
+        for field in (
+            "supply_pump_device",
+            "supply_pump_app_key",
+            "supply_pump_target",
+        ):
+            try:
+                has_pump = has_pump or bool(
+                    str(getattr(cfg, field).value or "").strip()
+                )
+            except ValueError:  # not configured
+                pass
+        self.supply_pump.hidden = not has_pump
         self.heading.hidden = not has_angle
 
         max_hours = float(cfg.max_run_hours.value or 0)

@@ -8,6 +8,7 @@ schedules) go to the Settings Channel aggregate under the app's key. See README.
 from __future__ import annotations
 
 import math
+import re
 import time
 import uuid
 from datetime import UTC, datetime
@@ -505,6 +506,7 @@ def settings_payload(
     max_run_hours: float,
     tz_name: str,
     schedules: list[dict],
+    supply_pump: dict | None = None,
     ts: int | None = None,
 ) -> dict:
     """This app's entry in the Settings Channel aggregate (under its app key)."""
@@ -517,5 +519,115 @@ def settings_payload(
         "max_run_s": round(max_run_hours * 3600) if max_run_hours else None,
         "timezone": tz_name,
         "schedules": [schedule_for_edge(s, tz_name, max_run_hours) for s in schedules],
+        "supply_pump": supply_pump,
         "updated_ts": ts if ts is not None else now_ms(),
     }
+
+
+# --------------------------------------------------------------------------- supply pump
+#
+# A pump on another device (a Pump Control install) that supplies the pivot's water. The
+# edge controller starts and stops it with the pivot's runs; this app only tells the edge
+# which pump that is (settings, and the start command's params) and shows the pump's state
+# as its Pump Control install reports it in tags p_<target>_<field>.
+
+PUMP_RUNNING = "Running"
+PUMP_STOPPED = "Stopped"
+PUMP_UNKNOWN = "Unknown"
+
+_SLUG_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+
+def pump_tag_key(target: str, field: str) -> str:
+    """The Pump Control tag of one pump's field: p_<target, made tag-safe>_<field>."""
+    slug = _SLUG_RE.sub("_", str(target or "").strip()).strip("_") or "pump"
+    return f"p_{slug}_{field}"
+
+
+def supply_pump_link(
+    device_id: Any,
+    app_key: Any,
+    target: Any,
+    *,
+    with_pivot: Any,
+    lead_s: Any,
+    run_on_s: Any,
+) -> dict | None:
+    """The supply pump as the edge needs it, or None when no pump is linked.
+
+    A link missing its app key or target is still returned (the page says what is missing),
+    so the edge can see a half-set link rather than none.
+    """
+    device = str(device_id).strip() if device_id not in (None, "") else ""
+    app_key = str(app_key or "").strip()
+    target = str(target or "").strip()
+    if not (device or app_key or target):
+        return None
+    lead = coerce_number(lead_s)
+    run_on = coerce_number(run_on_s)
+    return {
+        "device_id": device or None,
+        "app_key": app_key or None,
+        "target": target or None,
+        "start_with_pivot": bool(with_pivot) if with_pivot is not None else True,
+        "lead_s": max(0, round(lead)) if lead is not None else 0,
+        "run_on_s": max(0, round(run_on)) if run_on is not None else 0,
+    }
+
+
+def supply_pump_problem(link: dict | None) -> str | None:
+    """What a half-set link is missing, or None when it is complete (or absent)."""
+    if not link:
+        return None
+    missing = [
+        label
+        for key, label in (
+            ("device_id", "Supply Pump Device"),
+            ("app_key", "Supply Pump App Key"),
+            ("target", "Supply Pump Target ID"),
+        )
+        if not link.get(key)
+    ]
+    if missing:
+        return "Supply pump link incomplete: set " + ", ".join(missing)
+    return None
+
+
+def supply_pump_state(tags: dict | None, target: str) -> dict:
+    """The pump's reported state from its Pump Control install's tags.
+
+    ``running`` is True / False only when the install reports a boolean; anything else
+    (no tags, not reported yet, unreadable) is Unknown.
+    """
+    tags = tags or {}
+    running = tags.get(pump_tag_key(target, "running"))
+    running = running if isinstance(running, bool) else None
+    state = (
+        PUMP_RUNNING
+        if running is True
+        else PUMP_STOPPED
+        if running is False
+        else PUMP_UNKNOWN
+    )
+    name = tags.get(pump_tag_key(target, "name"))
+    return {
+        "running": running,
+        "state": state,
+        "name": str(name) if name else None,
+        "last_started": coerce_number(tags.get(pump_tag_key(target, "last_started"))),
+        "last_stopped": coerce_number(tags.get(pump_tag_key(target, "last_stopped"))),
+    }
+
+
+def supply_pump_mode_text(link: dict | None) -> str | None:
+    """How the pump follows the pivot, e.g. 'Starts with the pivot, 30 s lead, 60 s run-on'."""
+    if not link:
+        return None
+    if not link.get("start_with_pivot"):
+        return "Not started with the pivot"
+    text = "Starts with the pivot"
+    if link.get("lead_s"):
+        text += f", {link['lead_s']} s lead"
+    if link.get("run_on_s"):
+        text += f", {link['run_on_s']} s run-on"
+    return text

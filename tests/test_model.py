@@ -258,3 +258,46 @@ def test_coerce_lat_lon():
     assert model.coerce_lat_lon(0, 181) is None
     assert model.coerce_lat_lon(float("nan"), 149) is None
     assert model.coerce_lat_lon(None, 149) is None
+
+
+def test_pump_tag_key_matches_pump_control():
+    assert model.pump_tag_key("pump_start", "running") == "p_pump_start_running"
+    assert model.pump_tag_key("Pump 1", "name") == "p_Pump_1_name"
+    assert model.pump_tag_key("", "state") == "p_pump_state"
+
+
+def test_supply_pump_link():
+    assert (
+        model.supply_pump_link(None, "", None, with_pivot=True, lead_s=0, run_on_s=0)
+        is None
+    )
+    link = model.supply_pump_link(
+        123, " pump_control_1 ", "pump_1", with_pivot=None, lead_s=12.4, run_on_s=-5
+    )
+    assert link == {
+        "device_id": "123",
+        "app_key": "pump_control_1",
+        "target": "pump_1",
+        "start_with_pivot": True,
+        "lead_s": 12,
+        "run_on_s": 0,
+    }
+    assert model.supply_pump_problem(link) is None
+    half = model.supply_pump_link(
+        "123", None, None, with_pivot=True, lead_s=None, run_on_s=None
+    )
+    assert model.supply_pump_problem(half) == (
+        "Supply pump link incomplete: set Supply Pump App Key, Supply Pump Target ID"
+    )
+
+
+def test_supply_pump_state():
+    assert model.supply_pump_state(None, "pump_1")["state"] == "Unknown"
+    tags = {"p_pump_1_running": "yes", "p_pump_1_name": "Bore"}
+    state = model.supply_pump_state(tags, "pump_1")
+    assert state["running"] is None and state["state"] == "Unknown"  # not a boolean
+    assert state["name"] == "Bore"
+    assert (
+        model.supply_pump_state({"p_pump_1_running": False}, "pump_1")["state"]
+        == "Stopped"
+    )

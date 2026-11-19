@@ -1,7 +1,12 @@
 from pathlib import Path
 
 from pydoover import config
-from pydoover.processor import ManySubscriptionConfig, ScheduleConfig, TimezoneConfig
+from pydoover.processor import (
+    ExtendedPermissionsConfig,
+    ManySubscriptionConfig,
+    ScheduleConfig,
+    TimezoneConfig,
+)
 
 
 class AngleSource(config.Object):
@@ -327,13 +332,79 @@ class PivotControlConfig(config.Schema):
         position=30,
     )
 
+    # --- Supply pump (a pump on another device that waters the pivot) ------------
+    supply_pump_device = config.Device(
+        "Supply Pump Device",
+        name="supply_pump_device",
+        description=(
+            "Optional: the device with the pump that supplies this pivot's water. "
+            "Also add it under Devices below so its state can be read."
+        ),
+        default=None,
+        required=False,
+        position=31,
+    )
+    supply_pump_app_key = config.String(
+        "Supply Pump App Key",
+        name="supply_pump_app_key",
+        description="The Pump Control install's app key on that device, e.g. 'pump_control_1'.",
+        default=None,
+        required=False,
+        position=32,
+    )
+    supply_pump_target = config.String(
+        "Supply Pump Target ID",
+        name="supply_pump_target",
+        description="The pump's Target ID in that install, e.g. 'pump_1'.",
+        default=None,
+        required=False,
+        position=33,
+    )
+    supply_pump_with_pivot = config.Boolean(
+        "Start Pump with Pivot Runs",
+        name="supply_pump_with_pivot",
+        description=(
+            "The edge controller starts the supply pump with every pivot run (manual or "
+            "scheduled) and stops it when the run ends."
+        ),
+        default=True,
+        position=34,
+    )
+    supply_pump_lead_s = config.Number(
+        "Pump Lead Time (s)",
+        name="supply_pump_lead_s",
+        description="Seconds the pump runs before the pivot starts, to fill the line.",
+        default=0.0,
+        minimum=0,
+        position=35,
+    )
+    supply_pump_run_on_s = config.Number(
+        "Pump Run-On (s)",
+        name="supply_pump_run_on_s",
+        description="Seconds the pump keeps running after the pivot stops.",
+        default=0.0,
+        minimum=0,
+        position=36,
+    )
+    extended_permissions = ExtendedPermissionsConfig(
+        extra_fields=["id", "name", "display_name"],
+        default={
+            "devices": [],
+            "groups": [],
+            "apps_installed": [],
+            "all_devices": False,
+        },
+        required=False,
+        position=37,
+    )
+
     # --- Channels ----------------------------------------------------------------
     command_channel = config.String(
         "Command Channel",
         name="command_channel",
         description="Channel commands are published on, one message each. The edge may reply there.",
         default="io_commands",
-        position=31,
+        position=39,
         advanced=True,
     )
     settings_channel = config.String(
@@ -344,7 +415,7 @@ class PivotControlConfig(config.Schema):
             "under this app's key."
         ),
         default="control_settings",
-        position=32,
+        position=40,
         advanced=True,
     )
     subscription = ManySubscriptionConfig(
@@ -354,17 +425,17 @@ class PivotControlConfig(config.Schema):
             "controls, the Command Channel for replies and tag_values for the angle."
         ),
         advanced=True,
-        position=33,
+        position=41,
     )
     dv_proc_schedules = ScheduleConfig(
         default="rate(5 minutes)",
         description="How often unconfirmed commands and schedule summaries are re-checked.",
         advanced=True,
-        position=34,
+        position=42,
     )
 
-    position = config.ApplicationPosition(default=10, position=35)
-    default_open = config.ApplicationDefaultOpen(default=True, position=36)
+    position = config.ApplicationPosition(default=10, position=43)
+    default_open = config.ApplicationDefaultOpen(default=True, position=44)
 
 
 def export():

@@ -1,6 +1,6 @@
 from types import SimpleNamespace as NS
 
-from conftest import APP_KEY, Harness
+from conftest import APP_KEY, EXAMPLE_CONFIG, Harness
 from pydoover.models import AggregateUpdateEvent
 
 from pivot_control import model
@@ -307,3 +307,137 @@ async def test_angle_shown_with_gps_and_centre_only():
     )
     app = await h.app()
     assert app.ui.angle.hidden is False
+
+
+# --------------------------------------------------------------------------- supply pump
+
+PUMP_DEVICE = "123456789012345678"
+PUMP_CONFIG = dict(
+    EXAMPLE_CONFIG,
+    supply_pump_device=PUMP_DEVICE,
+    supply_pump_app_key="pump_control_2",
+    supply_pump_target="pump_start",
+    supply_pump_lead_s=30,
+    supply_pump_run_on_s=60,
+)
+DEVICE_MAP = {PUMP_DEVICE: {"id": PUMP_DEVICE, "display_name": "Eastern Pump"}}
+
+
+def pump_tags(**fields):
+    return {f"p_pump_start_{k}": v for k, v in fields.items()}
+
+
+async def pump_app(h):
+    app = await h.app()
+    app.received_deployment_config = {"DEVICE_MAP": DEVICE_MAP}
+    return app
+
+
+async def test_no_supply_pump_configured():
+    h = Harness()
+    app = await h.app()
+    await app.on_deployment(None)
+    assert app.ui.supply_pump.hidden is True
+    assert h.api.fetched == []
+    settings = h.api.aggregates[-1][1][APP_KEY]
+    assert settings["supply_pump"] is None
+    await app.on_start(None, None)
+    assert "supply_pump" not in h.api.messages[-1][1]["params"]
+
+
+async def test_supply_pump_state_shown():
+    h = Harness(config=PUMP_CONFIG)
+    h.api.remote[(int(PUMP_DEVICE), "tag_values")] = {
+        "pump_control_2": pump_tags(
+            running=True, name="Diesel Pump", last_started=1795000000000
+        )
+    }
+    app = await pump_app(h)
+    assert app.ui.supply_pump.hidden is False
+    await app.on_deployment(None)
+    assert app.tags.supply_pump_name.value == "Eastern Pump: Diesel Pump"
+    assert app.tags.supply_pump_state.value == "Running"
+    assert app.tags.supply_pump_running.value is True
+    assert app.tags.supply_pump_last_started.value == 1795000000000
+    assert app.tags.supply_pump_mode.value == (
+        "Starts with the pivot, 30 s lead, 60 s run-on"
+    )
+    assert app.tags.supply_pump_checked.value is not None
+    assert app.tags.supply_pump_warning_hidden.value is True
+
+    settings = h.api.aggregates[-1][1][APP_KEY]
+    assert settings["supply_pump"] == {
+        "device_id": PUMP_DEVICE,
+        "app_key": "pump_control_2",
+        "target": "pump_start",
+        "start_with_pivot": True,
+        "lead_s": 30,
+        "run_on_s": 60,
+    }
+
+    # Stopped, on the next schedule tick.
+    h.api.remote[(int(PUMP_DEVICE), "tag_values")]["pump_control_2"].update(
+        pump_tags(running=False, last_stopped=1795000600000)
+    )
+    app = await pump_app(h)
+    await app.on_schedule(None)
+    assert app.tags.supply_pump_state.value == "Stopped"
+    assert app.tags.supply_pump_last_stopped.value == 1795000600000
+
+
+async def test_supply_pump_unreadable_or_unreported_is_unknown():
+    h = Harness(config=PUMP_CONFIG)
+    app = await pump_app(h)
+    await app.on_schedule(None)  # no permission on the pump's device
+    assert app.tags.supply_pump_state.value == "Unknown"
+    assert app.tags.supply_pump_running.value is None
+    assert "add it under Devices" in app.tags.supply_pump_warning.value
+    assert app.tags.supply_pump_warning_hidden.value is False
+    assert h.notifications.sent == []
+
+    h.api.remote[(int(PUMP_DEVICE), "tag_values")] = {"other_app": {"x": 1}}
+    app = await pump_app(h)
+    await app.on_schedule(None)  # readable, but the pump app hasn't reported
+    assert app.tags.supply_pump_state.value == "Unknown"
+    assert "reported nothing yet" in app.tags.supply_pump_warning.value
+    assert app.tags.supply_pump_name.value == "Eastern Pump: pump_start"
+
+
+async def test_incomplete_supply_pump_link_warns_and_is_not_commanded():
+    config = dict(EXAMPLE_CONFIG, supply_pump_device=PUMP_DEVICE)
+    h = Harness(config=config)
+    app = await pump_app(h)
+    await app.on_deployment(None)
+    assert h.api.fetched == []
+    assert "Supply Pump App Key" in app.tags.supply_pump_warning.value
+    assert app.tags.supply_pump_state.value == "Unknown"
+    await app.on_start(None, None)
+    assert "supply_pump" not in h.api.messages[-1][1]["params"]
+
+
+async def test_start_and_stop_carry_the_supply_pump():
+    h = Harness(config=PUMP_CONFIG)
+    app = await pump_app(h)
+    await app.on_start(None, None)
+    cmd = h.api.messages[-1][1]
+    assert cmd["command"] == "start"
+    assert cmd["params"]["supply_pump"]["target"] == "pump_start"
+    assert cmd["params"]["supply_pump"]["lead_s"] == 30
+    assert cmd["params"]["direction"] == "forward"
+    assert model.command_label(cmd) == "Start Forward at 50 %"
+
+    app = await pump_app(h)
+    await app.on_stop(None, None)
+    cmd = h.api.messages[-1][1]
+    assert cmd["command"] == "stop"
+    assert cmd["params"]["supply_pump"]["run_on_s"] == 60
+
+
+async def test_pump_not_started_with_pivot_stays_out_of_commands():
+    h = Harness(config=dict(PUMP_CONFIG, supply_pump_with_pivot=False))
+    app = await pump_app(h)
+    await app.on_deployment(None)
+    assert app.tags.supply_pump_mode.value == "Not started with the pivot"
+    assert h.api.aggregates[-1][1][APP_KEY]["supply_pump"]["start_with_pivot"] is False
+    await app.on_start(None, None)
+    assert "supply_pump" not in h.api.messages[-1][1]["params"]

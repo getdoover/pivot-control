@@ -33,6 +33,9 @@ Key capabilities:
   angle or for a number of hours, with a pending indicator until the pivot confirms
 - **Schedules** -- four schedule slots the operator edits on the device page; the edge
   controller runs them
+- **Supply pump** -- link the pump on another device (a Pump Control install) that waters
+  the pivot: its live state shows on the pivot's page, and the edge controller starts and
+  stops it with the pivot's runs, with an optional lead time and run-on
 - **Notifications** -- safety tripped while running, command not confirmed, and (opt-in)
   low line pressure while running
 
@@ -45,7 +48,9 @@ Key capabilities:
    reverse outputs by, and the **message paths** it reports their state on.
 3. Optionally point **Angle Source** at the app and tag that carry the pivot's angle, and set
    the safety and line pressure inputs.
-4. Deploy. The page renders straight away and reads "No reading yet" until the controller
+4. Optionally link the **supply pump**: its device, the Pump Control install's app key and
+   the pump's Target ID, and add that device under **Devices** so its state can be read.
+5. Deploy. The page renders straight away and reads "No reading yet" until the controller
    reports.
 
 <br/>
@@ -84,6 +89,13 @@ outputs and the safety circuit, the loop current for pressure.
 | **Max Run Hours** | `max_run_hours` | Longest run the edge allows; 0 = no limit | `0` |
 | **Command Confirm Timeout (s)** | `confirm_timeout_s` | How long the reported state has to match a command | `120` |
 | **Timezone** | `dv_proc_timezone` | Timezone schedule times are shown and sent in | `Australia/Brisbane` |
+| **Supply Pump Device** | `supply_pump_device` | Optional: the device with the pump that supplies the pivot. Add it under **Devices** too | empty |
+| **Supply Pump App Key** | `supply_pump_app_key` | The Pump Control install's app key on that device, e.g. `pump_control_1` | empty |
+| **Supply Pump Target ID** | `supply_pump_target` | The pump's Target ID in that install, e.g. `pump_1` | empty |
+| **Start Pump with Pivot Runs** | `supply_pump_with_pivot` | The edge starts the pump with every run, manual or scheduled, and stops it when the run ends | `true` |
+| **Pump Lead Time (s)** | `supply_pump_lead_s` | Seconds the pump runs before the pivot starts | `0` |
+| **Pump Run-On (s)** | `supply_pump_run_on_s` | Seconds the pump keeps running after the pivot stops | `0` |
+| **Devices** | `dv_proc_extended_permissions` | Devices this app may read: add the supply pump's device | none |
 | **Command Channel** | `command_channel` | Where commands are published | `io_commands` |
 | **Settings Channel** | `settings_channel` | Whose aggregate carries the settings and schedules | `control_settings` |
 | **Subscription** | `dv_proc_subscriptions` | Channels the app is invoked on | `io_state`, `ui_cmds`, `io_commands`, `tag_values` |
@@ -120,6 +132,15 @@ show when configured.
 | on | on | Unknown |
 | not reported yet | | No reading yet |
 
+**Supply Pump.** When a supply pump is linked, a *Supply Pump* section shows its device and
+name (e.g. `Eastern Pump: Diesel Pump`), its state -- **Running**, **Stopped** or
+**Unknown** -- as its Pump Control install reports it, when it last started and stopped, how
+it follows the pivot (`Starts with the pivot, 30 s lead, 60 s run-on`) and when its state was
+last read. It is read on deployment, every schedule tick and after each Start or Stop.
+Unknown means the state could not be read or hasn't been reported, and a warning above says
+why: the link is incomplete, the device isn't under **Devices**, or the pump app has reported
+nothing yet.
+
 **Control.** Choose a direction, a speed and how the run ends -- **Until stopped**, **Stop
 at angle** (0-360°) or **Run for hours** -- then **Start**. **Stop** stops it. After either,
 a banner shows the command as pending until the reported status matches it; if it doesn't
@@ -152,6 +173,11 @@ start time, stop angle or run time is sent disabled and its header says what is 
 | **pending_command** | object | The command awaiting confirmation (the message below, plus `timed_out`) |
 | **last_command** | string | The last command and its outcome |
 | **schedules** | array | The four schedule slots as edited |
+| **supply_pump_name** | string | The linked supply pump, `<device>: <pump name>` |
+| **supply_pump_state** | string | Running / Stopped / Unknown, as its Pump Control install reports it |
+| **supply_pump_running** | boolean | `true` / `false` as reported; `null` when unknown |
+| **supply_pump_last_started** / **supply_pump_last_stopped** | number | As the pump's install reports them (ms) |
+| **supply_pump_checked** | number | When the pump's state was last read (ms) |
 | **run_output** / **forward_output** / **reverse_output** / **safety_input** / **pressure_input** | | Raw inputs as last reported |
 
 ### Inputs
@@ -163,6 +189,11 @@ centre is set, the angle is the bearing from the centre to the end tower's latit
 longitude tags (positions within 10 m of the centre give no angle). The map reads the same
 tags' history from `tag_values`, or in *Location channel* mode the `location` channel's
 aggregate (`lat`, `long`) and messages.
+
+The supply pump's state is read from the linked device's `tag_values` aggregate, under the
+Pump Control install's app key: `p_<target>_running`, `p_<target>_name`,
+`p_<target>_last_started` and `p_<target>_last_stopped` (the target with anything but
+letters, digits and `_` replaced by `_`). Reading another device needs it under **Devices**.
 
 ### Commands
 
@@ -182,7 +213,23 @@ One message per command on the **Command Channel**:
 ```
 
 `duration_s` is `null` unless the run is for a number of hours; `stop_angle_deg` is `null`
-unless it stops at an angle. The controller may reply on the same channel with
+unless it stops at an angle.
+
+When a supply pump is linked and **Start Pump with Pivot Runs** is on, Start and Stop carry it
+in `params.supply_pump` (the same object as in the settings below), and the edge sequences the
+pump with the pivot itself: on start, the pump first and the pivot `lead_s` later; on stop,
+the pivot first and the pump `run_on_s` later. This app never commands the pump's device
+directly.
+
+```json
+{"command": "start", "target": "run", "duration_s": null,
+ "params": {"direction": "forward", "speed_percent": 50, "stop_angle_deg": null,
+            "supply_pump": {"device_id": "123456789012345678", "app_key": "pump_control_1",
+                            "target": "pump_1", "start_with_pivot": true,
+                            "lead_s": 30, "run_on_s": 60}},
+ "request_id": "<uuid4>", "app_key": "<app key>", "app": "pivot_control",
+ "ts": 1795050000000}
+``` The controller may reply on the same channel with
 `{"request_id": "...", "ok": true|false, "error": "..."}`; a reply is shown when present and
 never required.
 
@@ -202,11 +249,19 @@ every schedule edit, replacing only that key:
      "start_local": "2026-11-20T06:00:00+10:00", "direction": "forward",
      "speed_percent": 50, "stop_angle_deg": 180, "duration_s": null}
   ],
+  "supply_pump": {"device_id": "123456789012345678", "app_key": "pump_control_1",
+                  "target": "pump_1", "start_with_pivot": true,
+                  "lead_s": 30, "run_on_s": 60},
   "updated_ts": 1795050000000}}
 ```
 
 All four slots are always present. A schedule starts its run at `start_ts` with the same
 fields as a start command; `duration_s` is capped at `max_run_s`.
+
+`supply_pump` is `null` when no pump is linked. When `start_with_pivot` is true the edge
+starts the pump (the Pump Control install `app_key` on `device_id`, pump `target`) with every
+run, scheduled or manual, `lead_s` before the pivot, and stops it `run_on_s` after the pivot
+stops. A half-set link is sent with its missing parts `null`; the edge ignores it.
 
 ### Notifications
 

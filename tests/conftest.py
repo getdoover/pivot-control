@@ -2,6 +2,7 @@
 notifications and UI command values faked."""
 
 import copy
+from types import SimpleNamespace
 
 import pytest
 from pydoover.tags.manager import TagsManagerProcessor
@@ -32,6 +33,16 @@ class FakeApi:
     def __init__(self):
         self.messages = []
         self.aggregates = []
+        # Other devices' channel aggregates: {(agent_id, channel): data}; a missing one raises
+        # as a device without permission does.
+        self.remote = {}
+        self.fetched = []
+
+    async def fetch_channel_aggregate(self, channel, agent_id=None, **kwargs):
+        self.fetched.append((agent_id, channel))
+        if (agent_id, channel) not in self.remote:
+            raise PermissionError(f"no access to {channel} on {agent_id}")
+        return SimpleNamespace(data=self.remote[(agent_id, channel)])
 
     async def create_message(self, channel, data, **kwargs):
         self.messages.append((channel, data))

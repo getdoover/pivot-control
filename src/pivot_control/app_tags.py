@@ -48,3 +48,14 @@ class PivotControlTags(Tags):
     safety_alert_active = Tag("boolean", default=False)
     low_pressure_active = Tag("boolean", default=False)
     safety_warning_hidden = Tag("boolean", default=True)
+
+    # Supply pump (another device's Pump Control install), as last read from its tags.
+    supply_pump_name = Tag("string", default=None)  # "<device>: <pump name>"
+    supply_pump_state = Tag("string", default="Unknown")  # Running / Stopped / Unknown
+    supply_pump_running = Tag("boolean", default=None)
+    supply_pump_last_started = Tag("number", default=None)  # unix ms
+    supply_pump_last_stopped = Tag("number", default=None)  # unix ms
+    supply_pump_mode = Tag("string", default=None)  # how it follows the pivot
+    supply_pump_checked = Tag("number", default=None)  # unix ms of the last read
+    supply_pump_warning = Tag("string", default="")
+    supply_pump_warning_hidden = Tag("boolean", default=True)
