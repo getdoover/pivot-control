@@ -21,7 +21,6 @@ import {
   tagValue,
   toLatLon,
   toNumber,
-  zoomForSpan,
   type LatLon,
   type TagRef,
   type TrackPoint,
@@ -133,7 +132,7 @@ function useFixedLocation(agentId: string | undefined, enabled: boolean) {
   });
 }
 
-function PivotMap({
+export function PivotMap({
   centre,
   tower,
   track,
@@ -249,7 +248,8 @@ function PivotMap({
     if (centre && tower) span = 2 * distanceM(centre, tower);
     if (centre && radiusM) span = Math.max(span, 2 * radiusM);
     if (span > 0 && centre) {
-      map.setView(ll(centre), zoomForSpan(centre.lat, span * 1.25, divRef.current?.clientWidth || 320));
+      // The whole circle the arm sweeps, so the tower stays in view as it moves.
+      map.fitBounds(L.latLng(centre.lat, centre.lon).toBounds(span * 1.1), { padding: [8, 8] });
     } else {
       map.setView(ll(anchor), 16);
     }

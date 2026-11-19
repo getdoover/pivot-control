@@ -10,11 +10,4 @@ declare module "customer_site/useRemoteParams" {
   export function useRemoteParams(): Record<string, string | undefined>;
 }
 
-// google-maps-react-markers ships its own types, but declare loosely to avoid a
-// hard type dependency in the federated build.
-declare module "google-maps-react-markers" {
-  const GoogleMap: (props: Record<string, unknown>) => JSX.Element;
-  export default GoogleMap;
-}
-
 declare module "*.css";
