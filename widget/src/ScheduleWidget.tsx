@@ -185,7 +185,7 @@ function ActiveSchedule({
                 {current && (
                   <>
                     <div
-                      className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                      className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/10"
                       role="progressbar"
                       aria-valuemin={0}
                       aria-valuemax={100}
@@ -545,8 +545,9 @@ function ScheduleInner({ uiElement }: { uiElement?: UiElement }) {
     list.forEach((s, i) => {
       const errs = stepErrors(s, maxHours);
       if (errs.length) {
-        found[s.key] = mode === "simple" ? errs : errs.map((e) => `Step ${i + 1}: ${lowerFirst(e)}`);
-        lines.push(...found[s.key]);
+        // Kept without their step number, which is added where shown (steps can move).
+        found[s.key] = errs;
+        lines.push(...errs.map((e) => `Step ${i + 1}: ${lowerFirst(e)}`));
       }
     });
     setErrors(found);
@@ -656,7 +657,7 @@ function ScheduleInner({ uiElement }: { uiElement?: UiElement }) {
           key={editing.key}
           draft={editing}
           onChange={updateStep}
-          errors={errors[editing.key] ?? []}
+          errors={(errors[editing.key] ?? []).map((e) => `Step ${index + 1}: ${lowerFirst(e)}`)}
           angle={angle}
           title={`Step ${index + 1}`}
         />
@@ -689,7 +690,7 @@ function ScheduleInner({ uiElement }: { uiElement?: UiElement }) {
   if (view === "past") {
     return (
       <Card>
-        <Header title="Past schedules" onBack={() => setView("menu")} right={<span className="text-xs text-muted-foreground">Latest {history.length} of 5</span>} />
+        <Header title="Past schedules" onBack={() => setView("menu")} right={<span className="text-xs text-muted-foreground">Newest first</span>} />
         <PastSchedules history={history} now={now} onPick={(s) => resetEditor(s.mode === "simple" ? "simple" : "detailed", s.steps)} />
       </Card>
     );

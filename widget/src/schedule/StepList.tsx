@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
-import { endText, fmtNum, parseNum, type DraftStep } from "./model";
+import { endText, fmtNum, lowerFirst, parseNum, type DraftStep } from "./model";
 import { AntiClockwise, Clockwise, cx, Droplet, DropletOff, Grip, X } from "./ui";
 
 /** One step's settings in a line, from a draft (values as typed). */
@@ -138,9 +138,9 @@ export function StepList({
               </span>
               <span className="flex min-w-0 flex-col gap-0.5">
                 <DraftSummary d={s} />
-                {errs.map((m) => (
+                {!editing && errs.map((m) => (
                   <span key={m} className="text-xs font-medium text-destructive">
-                    {m}
+                    Step {i + 1}: {lowerFirst(m)}
                   </span>
                 ))}
               </span>
