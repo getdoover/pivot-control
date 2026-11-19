@@ -8,7 +8,7 @@
         "description": "Start, stop, schedule and monitor a centre-pivot irrigator through its edge controller.",
         "long_description": "README.md",
         "depends_on": [],
-        "organisation_id": "93957122026437134",
+        "organisation_id": null,
         "export_config_command": "export-config",
         "export_ui_command": "export-ui",
         "export_notification_command": "export-notifications",
