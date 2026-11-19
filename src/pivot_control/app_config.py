@@ -21,6 +21,44 @@ class AngleSource(config.Object):
     )
 
 
+class LatitudeSource(config.Object):
+    """The tag of another app on this device carrying the GPS latitude."""
+
+    app_name = config.ApplicationInstall(
+        "Application",
+        description="App on this device that publishes the latitude (e.g. a GPS tracker).",
+        name="app_name",
+        default="gps_tracker_1",
+    )
+    tag_name = config.String(
+        "Tag Name",
+        description="Name of the latitude tag within that app, in decimal degrees.",
+        name="tag_name",
+        default="latitude",
+    )
+
+
+class LongitudeSource(config.Object):
+    """The tag of another app on this device carrying the GPS longitude."""
+
+    app_name = config.ApplicationInstall(
+        "Application",
+        description="App on this device that publishes the longitude (e.g. a GPS tracker).",
+        name="app_name",
+        default="gps_tracker_1",
+    )
+    tag_name = config.String(
+        "Tag Name",
+        description="Name of the longitude tag within that app, in decimal degrees.",
+        name="tag_name",
+        default="longitude",
+    )
+
+
+POSITION_FROM_TAGS = "GPS tags"
+POSITION_FROM_LOCATION = "Location channel"
+
+
 class PivotControlConfig(config.Schema):
     # --- Outputs (command targets) ---------------------------------------------
     run_target = config.String(
@@ -103,11 +141,83 @@ class PivotControlConfig(config.Schema):
         "Angle Source",
         description=(
             "Optional tag of another app on this device carrying the pivot's angle "
-            "(0 = North, clockwise), e.g. a GPS tracker's bearing_deg."
+            "(0 = North, clockwise), e.g. a GPS tracker's bearing_deg. Without it the angle "
+            "is worked out from the GPS tags and the pivot centre, when both are set."
         ),
         name="angle_source",
         default={},
         position=10,
+    )
+
+    # --- Map -------------------------------------------------------------------------
+    pivot_centre_lat = config.Number(
+        "Pivot Centre Latitude",
+        name="pivot_centre_lat",
+        description=(
+            "Latitude of the pivot point, decimal degrees. Leave empty to use the device's "
+            "fixed location."
+        ),
+        default=None,
+        required=False,
+        minimum=-90,
+        maximum=90,
+        position=11,
+    )
+    pivot_centre_lon = config.Number(
+        "Pivot Centre Longitude",
+        name="pivot_centre_lon",
+        description=(
+            "Longitude of the pivot point, decimal degrees. Leave empty to use the device's "
+            "fixed location."
+        ),
+        default=None,
+        required=False,
+        minimum=-180,
+        maximum=180,
+        position=12,
+    )
+    wetted_radius_m = config.Number(
+        "Wetted Radius (m)",
+        name="wetted_radius_m",
+        description="Optional radius the pivot waters, drawn as a circle on the map. Leave empty for none.",
+        default=None,
+        required=False,
+        minimum=0,
+        position=13,
+    )
+    track_hours = config.Number(
+        "Map Track (hours)",
+        name="track_hours",
+        description="How many hours of the end tower's recent positions the map draws as its track.",
+        default=24.0,
+        minimum=1,
+        maximum=720,
+        position=14,
+    )
+    position_source = config.Enum(
+        "Position Source",
+        name="position_source",
+        choices=[POSITION_FROM_TAGS, POSITION_FROM_LOCATION],
+        default=POSITION_FROM_TAGS,
+        description=(
+            "Where the end tower's GPS position comes from: latitude / longitude tags of "
+            "another app on this device (e.g. a GPS tracker), or the device's location channel."
+        ),
+        position=15,
+    )
+    latitude_source = LatitudeSource(
+        "Latitude Tag",
+        description="(GPS tags) tag of another app on this device carrying the end tower's latitude.",
+        name="latitude_source",
+        default={},
+        position=16,
+    )
+    longitude_source = LongitudeSource(
+        "Longitude Tag",
+        description="(GPS tags) tag of another app on this device carrying the end tower's longitude.",
+        name="longitude_source",
+        default={},
+        position=17,
     )
 
     # --- Line pressure -----------------------------------------------------------
@@ -116,42 +226,42 @@ class PivotControlConfig(config.Schema):
         name="pressure_path",
         description="Optional message path of the raw line pressure input (e.g. mA). Leave empty if none.",
         default="",
-        position=11,
+        position=18,
     )
     pressure_input_min = config.Number(
         "Pressure Minimum Input",
         name="pressure_input_min",
         description="Raw input at the minimum pressure (e.g. 4 mA).",
         default=4.0,
-        position=12,
+        position=19,
     )
     pressure_input_max = config.Number(
         "Pressure Maximum Input",
         name="pressure_input_max",
         description="Raw input at the maximum pressure (e.g. 20 mA).",
         default=20.0,
-        position=13,
+        position=20,
     )
     pressure_min = config.Number(
         "Pressure at Minimum Input",
         name="pressure_min",
         description="Pressure at the minimum input.",
         default=0.0,
-        position=14,
+        position=21,
     )
     pressure_max = config.Number(
         "Pressure at Maximum Input",
         name="pressure_max",
         description="Pressure at the maximum input.",
         default=100.0,
-        position=15,
+        position=22,
     )
     pressure_units = config.String(
         "Pressure Units",
         name="pressure_units",
         default="PSI",
         description="Units of the pressure.",
-        position=16,
+        position=23,
     )
     low_pressure_threshold = config.Number(
         "Low Pressure Threshold",
@@ -162,7 +272,7 @@ class PivotControlConfig(config.Schema):
         ),
         default=None,
         required=False,
-        position=17,
+        position=24,
     )
     low_pressure_delay_s = config.Number(
         "Low Pressure Start Delay (s)",
@@ -170,7 +280,7 @@ class PivotControlConfig(config.Schema):
         description="Seconds after a start before low pressure counts, while the line fills.",
         default=300.0,
         minimum=0,
-        position=18,
+        position=25,
     )
 
     # --- Running -----------------------------------------------------------------
@@ -180,7 +290,7 @@ class PivotControlConfig(config.Schema):
         description="Length of one percentage-timer cycle: at 50 % the run output is on for half of it.",
         default=60.0,
         minimum=1,
-        position=19,
+        position=26,
     )
     default_speed = config.Number(
         "Default Speed (%)",
@@ -189,7 +299,7 @@ class PivotControlConfig(config.Schema):
         default=50.0,
         minimum=1,
         maximum=100,
-        position=20,
+        position=27,
     )
     max_run_hours = config.Number(
         "Max Run Hours",
@@ -199,7 +309,7 @@ class PivotControlConfig(config.Schema):
         ),
         default=0.0,
         minimum=0,
-        position=21,
+        position=28,
     )
     confirm_timeout_s = config.Number(
         "Command Confirm Timeout (s)",
@@ -210,11 +320,11 @@ class PivotControlConfig(config.Schema):
         ),
         default=120.0,
         minimum=10,
-        position=22,
+        position=29,
     )
     dv_proc_timezone = TimezoneConfig(
         description="Timezone schedule start times are shown and sent to the edge in.",
-        position=23,
+        position=30,
     )
 
     # --- Channels ----------------------------------------------------------------
@@ -223,7 +333,7 @@ class PivotControlConfig(config.Schema):
         name="command_channel",
         description="Channel commands are published on, one message each. The edge may reply there.",
         default="io_commands",
-        position=24,
+        position=31,
         advanced=True,
     )
     settings_channel = config.String(
@@ -234,7 +344,7 @@ class PivotControlConfig(config.Schema):
             "under this app's key."
         ),
         default="control_settings",
-        position=25,
+        position=32,
         advanced=True,
     )
     subscription = ManySubscriptionConfig(
@@ -244,16 +354,17 @@ class PivotControlConfig(config.Schema):
             "controls, the Command Channel for replies and tag_values for the angle."
         ),
         advanced=True,
-        position=26,
+        position=33,
     )
     dv_proc_schedules = ScheduleConfig(
         default="rate(5 minutes)",
         description="How often unconfirmed commands and schedule summaries are re-checked.",
         advanced=True,
-        position=27,
+        position=34,
     )
 
-    position = config.ApplicationPosition(position=28)
+    position = config.ApplicationPosition(default=10, position=35)
+    default_open = config.ApplicationDefaultOpen(default=True, position=36)
 
 
 def export():

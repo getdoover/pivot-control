@@ -22,8 +22,11 @@ Key capabilities:
 - **Status** -- Running Forward / Running Reverse / Stopped / Unknown, from the reported
   forward and reverse outputs, with the time it last started and stopped
 - **Speed** -- the percentage timer setting, 1-100 %
+- **Map** -- a small satellite map of the pivot: its centre, the end tower's current GPS
+  position, the arm between them, the recent track and (optionally) the wetted circle
 - **Angle** -- the pivot's position from another app's tag (e.g. a GPS tracker's
-  `bearing_deg`), as a dial and a compass heading
+  `bearing_deg`), or worked out from the end tower's GPS position and the pivot centre, as a
+  dial and a compass heading
 - **Safety and line pressure** -- an optional safety circuit input and an optional 4-20 mA
   pressure transmitter, scaled to engineering units
 - **Start / Stop** -- start forward or reverse at a speed, running until stopped, to a stop
@@ -65,6 +68,11 @@ outputs and the safety circuit, the loop current for pressure.
 | **Safety Input Path** | `safety_path` | Optional safety circuit input | empty |
 | **Safety OK Value** | `safety_ok_value` | The safety input's value when healthy | `1` |
 | **Angle Source** | `angle_source` | `{app_name, tag_name}`: another app's tag carrying the angle, degrees, 0 = North, clockwise | tag `bearing_deg` |
+| **Pivot Centre Latitude / Longitude** | `pivot_centre_lat` / `pivot_centre_lon` | The pivot point, decimal degrees. Empty: the map uses the device's fixed location | empty |
+| **Wetted Radius (m)** | `wetted_radius_m` | Optional radius drawn as a circle on the map | empty |
+| **Map Track (hours)** | `track_hours` | How much of the end tower's recent path the map draws | `24` |
+| **Position Source** | `position_source` | Where the end tower's GPS position comes from: *GPS tags* (the two tags below) or *Location channel* (the device's `location` channel) | GPS tags |
+| **Latitude Tag** / **Longitude Tag** | `latitude_source` / `longitude_source` | `{app_name, tag_name}`: another app's tags carrying the end tower's latitude and longitude | `gps_tracker_1` `latitude` / `longitude` |
 | **Line Pressure Path** | `pressure_path` | Optional raw pressure input | empty |
 | **Pressure Min / Max Input** | `pressure_input_min` / `pressure_input_max` | Raw input range | `4` / `20` |
 | **Pressure at Min / Max Input** | `pressure_min` / `pressure_max` | Pressure at each end of the range | `0` / `100` |
@@ -87,6 +95,18 @@ no pressure, not zero; just under the minimum reads as the minimum.
 <br/>
 
 ## Using the Device Page
+
+**Map.** At the top of the panel: satellite imagery centred on the pivot, with the centre
+(white), the end tower's latest GPS position (orange), the arm between them (yellow) and the
+end tower's track over the last *Map Track* hours (blue). A dashed circle shows the wetted
+radius when one is set. The header repeats the status and the angle, and says how old the
+last GPS fix is. The map needs no API key or setup beyond a pivot centre (or the device's
+fixed location) and a GPS source; with neither it says so instead.
+
+Doover's main map places a device at its fixed location when it has one, and otherwise at
+its `location` channel, with that channel's history as the device's track. To follow the pivot
+on the main map, leave the device's fixed location empty, set the pivot centre here, and have
+the GPS source write the device's `location` channel (a GPS tracker app does).
 
 **Status.** Status, speed, angle and heading, safety (OK / Tripped), line pressure, last
 started, last stopped and the last command with its outcome. Safety, pressure and angle only
@@ -138,7 +158,11 @@ start time, stop angle or run time is sent disabled and its header says what is 
 
 Raw signals at the configured message paths, on any subscribed channel. A message carrying
 only some of them updates those and keeps the rest. The angle is read from the Angle Source
-app's tag in `tag_values`.
+app's tag in `tag_values`. Without one, when the Position Source is *GPS tags* and the pivot
+centre is set, the angle is the bearing from the centre to the end tower's latitude /
+longitude tags (positions within 10 m of the centre give no angle). The map reads the same
+tags' history from `tag_values`, or in *Location channel* mode the `location` channel's
+aggregate (`lat`, `long`) and messages.
 
 ### Commands
 

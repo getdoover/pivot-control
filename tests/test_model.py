@@ -194,3 +194,67 @@ def test_settings_payload():
     assert payload["max_run_s"] is None
     assert len(payload["schedules"]) == 4
     assert all(not s["enabled"] for s in payload["schedules"])
+
+
+# --------------------------------------------------------------------------- geometry
+
+# A pivot centre and points 400 m from it on the four compass points / diagonals.
+CENTRE = (-22.551015, 149.060910)
+DEG_PER_M_LAT = 1 / 111_195.0
+
+
+def _offset(lat, lon, north_m, east_m):
+    import math
+
+    return (
+        lat + north_m * DEG_PER_M_LAT,
+        lon + east_m * DEG_PER_M_LAT / math.cos(math.radians(lat)),
+    )
+
+
+@pytest.mark.parametrize(
+    "north_m, east_m, expected",
+    [
+        (400, 0, 0.0),
+        (0, 400, 90.0),
+        (-400, 0, 180.0),
+        (0, -400, 270.0),
+        (283, 283, 45.0),
+        (-283, -283, 225.0),
+        (283, -283, 315.0),
+    ],
+)
+def test_arm_angle_compass(north_m, east_m, expected):
+    tower = _offset(*CENTRE, north_m, east_m)
+    angle = model.arm_angle(CENTRE, tower)
+    # 0 and 360 are the same direction.
+    assert min(abs(angle - expected), 360 - abs(angle - expected)) < 0.05
+    assert 0 <= angle < 360
+
+
+def test_distance_m():
+    tower = _offset(*CENTRE, 300, 400)
+    assert model.distance_m(*CENTRE, *tower) == pytest.approx(500, abs=0.5)
+    assert model.distance_m(*CENTRE, *CENTRE) == 0
+
+
+def test_arm_angle_needs_both_points_and_a_real_arm():
+    assert model.arm_angle(None, CENTRE) is None
+    assert model.arm_angle(CENTRE, None) is None
+    assert model.arm_angle(CENTRE, (None, 149.0)) is None
+    assert model.arm_angle((None, None), CENTRE) is None
+    # Within GPS error of the centre: no meaningful bearing.
+    assert model.arm_angle(CENTRE, _offset(*CENTRE, 3, 3)) is None
+    # A real end-tower fix against its pivot centre: north-west of it.
+    assert model.arm_angle(CENTRE, (-22.548267, 149.057164)) == pytest.approx(
+        308.5, abs=0.1
+    )
+
+
+def test_coerce_lat_lon():
+    assert model.coerce_lat_lon("-22.5", "149.1") == (-22.5, 149.1)
+    assert model.coerce_lat_lon(0, 0) is None
+    assert model.coerce_lat_lon(91, 0) is None
+    assert model.coerce_lat_lon(0, 181) is None
+    assert model.coerce_lat_lon(float("nan"), 149) is None
+    assert model.coerce_lat_lon(None, 149) is None

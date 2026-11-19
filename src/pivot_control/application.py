@@ -20,7 +20,7 @@ from pydoover.models import (
 from pydoover.processor import Application
 
 from . import model
-from .app_config import PivotControlConfig
+from .app_config import POSITION_FROM_LOCATION, PivotControlConfig
 from .app_notifications import PivotControlNotifications
 from .app_tags import PivotControlTags
 from .app_ui import PivotControlUI
@@ -126,10 +126,13 @@ class PivotControlApplication(Application):
         await self._evaluate()
 
     async def on_aggregate_update(self, event: AggregateUpdateEvent):
-        # tag_values only (pre_hook_filter); the angle is re-read in _evaluate.
-        app_name, _ = self._angle_source()
+        # tag_values only (pre_hook_filter); the angle is re-read in _evaluate. Only the
+        # angle source's and the GPS app's tags matter: skip everything else (including this
+        # app's own tag writes).
+        watched = self._gps_apps() | {self._angle_source()[0]}
+        watched.discard(None)
         changed = getattr(getattr(event, "request_data", None), "data", None) or {}
-        if app_name and app_name not in changed:
+        if not watched or not watched.intersection(changed):
             return
         await self._evaluate()
 
@@ -225,6 +228,48 @@ class PivotControlApplication(Application):
         await self._update_pending(state, direction, now)
         await self._update_schedule_summaries(now)
 
+    def _tag_ref(self, field: str) -> tuple[str | None, str | None]:
+        """An {app_name, tag_name} config object, each part falling back to its default."""
+        source = getattr(self.config, field, None)
+        parts = []
+        for part in ("app_name", "tag_name"):
+            element = getattr(source, part, None)
+            try:
+                value = element.value
+            except ValueError:  # not in the deployment config
+                value = getattr(element, "default", None)
+            except AttributeError:
+                value = None
+            parts.append(value or None)
+        return parts[0], parts[1]
+
+    def _gps_apps(self) -> set[str]:
+        """Apps whose tags carry the GPS position (only in the GPS tags position source)."""
+        if self._cfg("position_source", "") == POSITION_FROM_LOCATION:
+            return set()
+        apps = {
+            self._tag_ref("latitude_source")[0],
+            self._tag_ref("longitude_source")[0],
+        }
+        return {a for a in apps if a}
+
+    def _other_tag(self, ref: tuple[str | None, str | None]):
+        app_name, tag_name = ref
+        if not (app_name and tag_name):
+            return None
+        return self.tag_manager.get_tag(tag_name, app_key=app_name)
+
+    def _gps_angle(self) -> float | None:
+        """The angle from the pivot centre to the end tower's GPS position, when both are set."""
+        if not self._gps_apps():
+            return None
+        centre = (self._cfg("pivot_centre_lat"), self._cfg("pivot_centre_lon"))
+        tower = (
+            self._other_tag(self._tag_ref("latitude_source")),
+            self._other_tag(self._tag_ref("longitude_source")),
+        )
+        return model.arm_angle(centre, tower)
+
     async def _update_angle(self):
         app_name, tag_name = self._angle_source()
         angle = None
@@ -232,6 +277,8 @@ class PivotControlApplication(Application):
             angle = model.normalise_angle(
                 self.tag_manager.get_tag(tag_name, app_key=app_name)
             )
+        if angle is None:
+            angle = self._gps_angle()
         if angle is not None:
             angle = round(angle, 1)
         await self._set("angle_deg", angle)

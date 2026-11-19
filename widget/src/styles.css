@@ -1,0 +1,99 @@
+.pcw {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  font-size: 13px;
+}
+
+.pcw-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pcw-status {
+  font-weight: 600;
+}
+
+.pcw-angle {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.pcw-spacer {
+  flex: 1;
+}
+
+.pcw-note {
+  opacity: 0.65;
+  font-size: 12px;
+}
+
+.pcw-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #9ca3af;
+}
+
+.pcw-dot.running {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+}
+
+.pcw-dot.stopped {
+  background: #ef4444;
+}
+
+.pcw-map {
+  width: 100%;
+  height: 280px;
+  border-radius: 8px;
+  overflow: hidden;
+  z-index: 0;
+  background: #1f2937;
+}
+
+.pcw-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.pcw-key {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: -1px;
+  border: 1.5px solid #111827;
+}
+
+.pcw-key.centre {
+  background: #ffffff;
+}
+
+.pcw-key.tower {
+  background: #f97316;
+}
+
+.pcw-key.track {
+  border-radius: 2px;
+  height: 3px;
+  width: 14px;
+  border: none;
+  background: #38bdf8;
+  vertical-align: 2px;
+}
+
+.pcw-msg {
+  padding: 16px;
+  opacity: 0.75;
+}

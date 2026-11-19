@@ -13,7 +13,7 @@ from pivot_control.application import PivotControlApplication
 
 APP_KEY = "pivot_control_1"
 
-BARMOUNT_CONFIG = {
+EXAMPLE_CONFIG = {
     "APP_KEY": APP_KEY,
     "safety_path": "$io_state.safety",
     "safety_ok_value": 1.0,
@@ -73,7 +73,7 @@ class Harness:
         tag_values: dict | None = None,
         ui_values: dict | None = None,
     ):
-        self.config = dict(BARMOUNT_CONFIG if config is None else config)
+        self.config = dict(EXAMPLE_CONFIG if config is None else config)
         self._tag_values = tag_values if tag_values is not None else {}
         self._last = None
         self.ui_values = ui_values or {}

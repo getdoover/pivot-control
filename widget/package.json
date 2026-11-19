@@ -1,0 +1,36 @@
+{
+  "name": "pivot-control-widget",
+  "version": "1.0.0",
+  "description": "Pivot map remote component for the Pivot Control app.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "build": "rsbuild build",
+    "watch": "rsbuild build --watch --mode development",
+    "serve": "serve -s assets/ -l 8005",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "author": "Doover Team",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@module-federation/enhanced": "^0.21.6",
+    "@module-federation/rsbuild-plugin": "^0.21.6",
+    "@rsbuild/core": "^1.6.14",
+    "@rsbuild/plugin-react": "^1.4.2",
+    "@tanstack/react-query": "~5.90.2",
+    "doover-js": "^0.19.0",
+    "leaflet": "^1.9.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router": "^7.7.0",
+    "serve": "^14.2.5"
+  },
+  "devDependencies": {
+    "@types/leaflet": "^1.9.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

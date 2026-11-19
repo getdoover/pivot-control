@@ -235,3 +235,75 @@ async def test_deployment_publishes_settings(harness):
     channel, data, _kwargs = harness.api.aggregates[-1]
     assert channel == "control_settings" and APP_KEY in data
     assert harness.notifications.sent == []
+
+
+async def test_angle_from_gps_and_centre_without_angle_tag(harness):
+    harness.config.update(pivot_centre_lat=-22.551015, pivot_centre_lon=149.060910)
+    harness.tag_values["gps_tracker_1"] = {
+        "latitude": -22.548267,
+        "longitude": 149.057164,
+    }
+    app = await harness.app()
+    event = NS(
+        channel=NS(name="tag_values"),
+        request_data=NS(data={"gps_tracker_1": {"latitude": -22.548267}}),
+    )
+    await app.on_aggregate_update(event)
+    assert app.tags.angle_deg.value == 308.5
+    assert app.tags.heading.value.endswith("NW")
+
+
+async def test_angle_tag_wins_over_gps(harness):
+    harness.config.update(pivot_centre_lat=-22.551015, pivot_centre_lon=149.060910)
+    harness.tag_values["gps_tracker_1"] = {
+        "bearing_deg": 12.0,
+        "latitude": -22.548267,
+        "longitude": 149.057164,
+    }
+    app = await harness.app()
+    await app.on_schedule(None)
+    assert app.tags.angle_deg.value == 12.0
+
+
+async def test_no_gps_angle_without_centre_or_in_location_mode(harness):
+    harness.tag_values["gps_tracker_1"] = {
+        "latitude": -22.548267,
+        "longitude": 149.057164,
+    }
+    app = await harness.app()
+    await app.on_schedule(None)
+    assert app.tags.angle_deg.value is None  # no centre configured
+
+    harness.config.update(
+        pivot_centre_lat=-22.551015,
+        pivot_centre_lon=149.060910,
+        position_source="Location channel",
+    )
+    app = await harness.app()
+    await app.on_schedule(None)
+    assert app.tags.angle_deg.value is None
+
+
+async def test_unrelated_tag_updates_are_skipped(harness):
+    app = await harness.app()
+    event = NS(
+        channel=NS(name="tag_values"),
+        request_data=NS(data={APP_KEY: {"status": "Stopped"}}),
+    )
+    await app.on_aggregate_update(event)
+    assert app.tags.status.value == "No reading yet"  # not evaluated
+
+
+async def test_angle_shown_with_gps_and_centre_only():
+    h = Harness(config={"APP_KEY": APP_KEY})
+    app = await h.app()
+    assert app.ui.angle.hidden is True
+    h = Harness(
+        config={
+            "APP_KEY": APP_KEY,
+            "pivot_centre_lat": -22.5,
+            "pivot_centre_lon": 149.0,
+        }
+    )
+    app = await h.app()
+    assert app.ui.angle.hidden is False

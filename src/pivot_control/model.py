@@ -206,6 +206,60 @@ def heading_text(angle: float | None) -> str | None:
     return f"{angle:.0f}° {point}"
 
 
+# --------------------------------------------------------------------------- geometry
+
+EARTH_RADIUS_M = 6_371_008.8
+
+# Closer to the centre than this, a GPS fix can't give a meaningful bearing: a few metres
+# of GPS error would swing it all the way round.
+MIN_ARM_LENGTH_M = 10.0
+
+
+def coerce_lat_lon(lat: Any, lon: Any) -> tuple[float, float] | None:
+    """A usable (lat, lon) in decimal degrees, or None (missing, NaN, out of range or 0, 0)."""
+    la, lo = coerce_number(lat), coerce_number(lon)
+    if la is None or lo is None or math.isnan(la) or math.isnan(lo):
+        return None
+    if not (-90 <= la <= 90 and -180 <= lo <= 180):
+        return None
+    if la == 0 and lo == 0:  # no-fix placeholder, not a real position
+        return None
+    return la, lo
+
+
+def distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle (haversine) distance in metres."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial bearing from point 1 to point 2: degrees, 0 = North, clockwise, [0, 360)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return math.degrees(math.atan2(y, x)) % 360.0
+
+
+def arm_angle(centre: Any, tower: Any) -> float | None:
+    """The pivot's angle from its centre to the end tower's GPS position, or None.
+
+    ``centre`` and ``tower`` are (lat, lon) pairs (either may be None). None when either is
+    missing or the tower is too close to the centre for the bearing to mean anything."""
+    if not centre or not tower:
+        return None
+    c = coerce_lat_lon(*centre)
+    t = coerce_lat_lon(*tower)
+    if c is None or t is None:
+        return None
+    if distance_m(c[0], c[1], t[0], t[1]) < MIN_ARM_LENGTH_M:
+        return None
+    return bearing_deg(c[0], c[1], t[0], t[1])
+
+
 # --------------------------------------------------------------------------- commands
 
 

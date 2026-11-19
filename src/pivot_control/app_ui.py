@@ -3,6 +3,7 @@ from pathlib import Path
 from pydoover import ui
 
 from . import model
+from .app_config import POSITION_FROM_LOCATION
 from .app_tags import PivotControlTags as T
 
 DIRECTION_OPTIONS = [ui.Option("Forward"), ui.Option("Reverse")]
@@ -67,6 +68,18 @@ class PivotControlUI(ui.UI):
         hidden=T.safety_warning_hidden,
         can_cancel=False,
         position=2,
+    )
+
+    # The map: pivot centre, end tower, arm and recent track. Its config comes from this
+    # app's deployment config (app_key); the widget reads tag_values / location itself.
+    pivot_map = ui.RemoteComponent(
+        name="pivot_map",
+        display_name="Pivot Map",
+        component_url="$config.app().dv_widget_url",
+        scope="PivotControlWidget",
+        module="./PivotControlWidget",
+        app_key="$config.app().APP_KEY",
+        position=3,
     )
 
     status = ui.TextVariable("Status", value=T.status, name="status", position=10)
@@ -162,6 +175,13 @@ class PivotControlUI(ui.UI):
             has_angle = bool(source.app_name.value) and bool(source.tag_name.value)
         except ValueError:  # not configured
             has_angle = False
+        if not has_angle:
+            # The angle is also worked out from the GPS tags and a configured pivot centre.
+            has_angle = (
+                cfg.position_source.value != POSITION_FROM_LOCATION
+                and cfg.pivot_centre_lat.value is not None
+                and cfg.pivot_centre_lon.value is not None
+            )
         self.angle.hidden = not has_angle
         self.heading.hidden = not has_angle
 
