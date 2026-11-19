@@ -1,0 +1,190 @@
+from pathlib import Path
+
+from pydoover import ui
+
+from . import model
+from .app_tags import PivotControlTags as T
+
+DIRECTION_OPTIONS = [ui.Option("Forward"), ui.Option("Reverse")]
+END_OPTIONS = [
+    ui.Option("Until stopped"),
+    ui.Option("Stop at angle"),
+    ui.Option("Run for hours"),
+]
+
+# Compass quadrants on the angle dial.
+ANGLE_RANGES = [
+    ui.Range("N-E", 0, 90, ui.Colour.blue),
+    ui.Range("E-S", 90, 180, ui.Colour.green),
+    ui.Range("S-W", 180, 270, ui.Colour.yellow),
+    ui.Range("W-N", 270, 360, ui.Colour.purple),
+]
+
+
+def _schedule_slot(n: int) -> ui.Submodule:
+    p = f"sched_{n}_"
+    return ui.Submodule(
+        f"Schedule {n}",
+        name=f"schedule_{n}",
+        # Nested elements aren't tag-bound by the declarative UI, so reference the tag by name.
+        status=ui.tag_ref(f"sched_{n}_summary", "string", "Off"),
+        is_collapsed=True,
+        children=[
+            ui.Switch("Enabled", name=p + "enabled"),
+            ui.DatetimeInput("Start", name=p + "start", pickers=["date", "time"]),
+            ui.Select(
+                "Direction",
+                name=p + "direction",
+                options=DIRECTION_OPTIONS,
+                default=model.FORWARD,
+            ),
+            ui.FloatInput("Speed", name=p + "speed", units="%", min_val=1, max_val=100),
+            ui.Select(
+                "End",
+                name=p + "end",
+                options=END_OPTIONS,
+                default=model.END_UNTIL_STOPPED,
+            ),
+            ui.FloatInput(
+                "Stop Angle", name=p + "stop_angle", units="°", min_val=0, max_val=360
+            ),
+            ui.FloatInput("Run Time", name=p + "hours", units="h", min_val=0),
+        ],
+    )
+
+
+class PivotControlUI(ui.UI):
+    command_warning = ui.WarningIndicator(
+        T.command_message,
+        name="command_warning",
+        hidden=T.command_warning_hidden,
+        can_cancel=False,
+        position=1,
+    )
+    safety_warning = ui.WarningIndicator(
+        "Safety circuit tripped",
+        name="safety_warning",
+        hidden=T.safety_warning_hidden,
+        can_cancel=False,
+        position=2,
+    )
+
+    status = ui.TextVariable("Status", value=T.status, name="status", position=10)
+    speed = ui.NumericVariable(
+        "Speed",
+        value=T.speed_percent,
+        units="%",
+        precision=0,
+        name="speed",
+        position=11,
+    )
+    angle = ui.NumericVariable(
+        "Angle",
+        value=T.angle_deg,
+        units="°",
+        precision=0,
+        form=ui.Widget.radial,
+        ranges=ANGLE_RANGES,
+        name="angle",
+        position=12,
+    )
+    heading = ui.TextVariable("Heading", value=T.heading, name="heading", position=13)
+    safety = ui.TextVariable("Safety", value=T.safety_text, name="safety", position=14)
+    pressure = ui.NumericVariable(
+        "Line Pressure", value=T.pressure, precision=1, name="pressure", position=15
+    )
+    last_started = ui.Timestamp(
+        "Last Started", value=T.last_started, name="last_started", position=16
+    )
+    last_stopped = ui.Timestamp(
+        "Last Stopped", value=T.last_stopped, name="last_stopped", position=17
+    )
+    last_command = ui.TextVariable(
+        "Last Command", value=T.last_command, name="last_command", position=18
+    )
+
+    control = ui.Submodule(
+        "Control",
+        name="control",
+        position=20,
+        children=[
+            ui.Select(
+                "Direction",
+                name="start_direction",
+                options=DIRECTION_OPTIONS,
+                default=model.FORWARD,
+            ),
+            ui.FloatInput(
+                "Speed", name="start_speed", units="%", min_val=1, max_val=100
+            ),
+            ui.Select(
+                "End",
+                name="start_end",
+                options=END_OPTIONS,
+                default=model.END_UNTIL_STOPPED,
+            ),
+            ui.FloatInput(
+                "Stop Angle", name="start_stop_angle", units="°", min_val=0, max_val=360
+            ),
+            ui.FloatInput("Run Time", name="start_hours", units="h", min_val=0),
+            ui.Button(
+                "Start",
+                name="start",
+                requires_confirm=True,
+                command_timeout=60,
+            ),
+            ui.Button("Stop", name="stop", requires_confirm=True, command_timeout=60),
+        ],
+    )
+
+    schedules = ui.Submodule(
+        "Schedules",
+        name="schedules",
+        position=30,
+        is_collapsed=True,
+        children=[
+            _schedule_slot(1),
+            _schedule_slot(2),
+            _schedule_slot(3),
+            _schedule_slot(4),
+        ],
+    )
+
+    async def setup(self):
+        cfg = self.config
+        if cfg is None:
+            return
+        self.pressure.units = cfg.pressure_units.value or None
+        self.pressure.hidden = not (cfg.pressure_path.value or "").strip()
+        self.safety.hidden = not (cfg.safety_path.value or "").strip()
+        try:
+            source = cfg.angle_source
+            has_angle = bool(source.app_name.value) and bool(source.tag_name.value)
+        except ValueError:  # not configured
+            has_angle = False
+        self.angle.hidden = not has_angle
+        self.heading.hidden = not has_angle
+
+        max_hours = float(cfg.max_run_hours.value or 0)
+        default_speed = float(cfg.default_speed.value or 50)
+        for name, element in self.get_interactions().items():
+            if name == "start_speed" or name.endswith("_speed"):
+                _set_default(element, default_speed)
+            if max_hours and (name == "start_hours" or name.endswith("_hours")):
+                element.max = max_hours
+
+
+def _set_default(element, default):
+    """An input's default (shown until an operator sets it) from config."""
+    element.default = default
+    element._value_location = f"$cmds.app().{element.name}::{default:g}"
+
+
+def export():
+    PivotControlUI(None, None, None).export(
+        Path(__file__).parents[2] / "doover_config.json", "pivot_control"
+    )
+
+
+if __name__ == "__main__":
+    export()

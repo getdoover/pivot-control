@@ -1,0 +1,29 @@
+{
+    "pivot_control": {
+        "name": "pivot_control",
+        "display_name": "Pivot Control",
+        "type": "PRO",
+        "visibility": "PUB",
+        "allow_many": true,
+        "description": "Start, stop, schedule and monitor a centre-pivot irrigator through its edge controller.",
+        "long_description": "README.md",
+        "depends_on": [],
+        "organisation_id": "93957122026437134",
+        "export_config_command": "export-config",
+        "export_ui_command": "export-ui",
+        "export_notification_command": "export-notifications",
+        "lambda_config": {
+            "Environment": {},
+            "Runtime": "python3.13",
+            "Timeout": 60,
+            "Handler": "src.pivot_control.handler",
+            "MemorySize": 128,
+            "Architectures": [
+                "arm64"
+            ]
+        },
+        "repository_url": "https://github.com/getdoover/pivot-control",
+        "data_access": "read_write",
+        "has_ui": true
+    }
+}
