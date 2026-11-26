@@ -184,8 +184,14 @@ class PivotControlUI(ui.UI):
         if cfg is None:
             return
         self.pressure.units = cfg.pressure_units.value or None
-        self.pressure.hidden = not (cfg.pressure_path.value or "").strip()
-        self.safety.hidden = not (cfg.safety_path.value or "").strip()
+        # An explicit path is always shown; a blank one (the automatic address) only once a
+        # value has ever arrived for it, which the app records in a tag.
+        self.pressure.hidden = (
+            False if (cfg.pressure_path.value or "").strip() else T.pressure_hidden
+        )
+        self.safety.hidden = (
+            False if (cfg.safety_path.value or "").strip() else T.safety_hidden
+        )
         try:
             source = cfg.angle_source
             has_angle = bool(source.app_name.value) and bool(source.tag_name.value)

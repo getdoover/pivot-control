@@ -96,32 +96,43 @@ class PivotControlConfig(config.Schema):
         "Run State Path",
         name="run_state_path",
         description=(
-            "Message path of the run output's reported state (0/1), '$channel.path.to.value'. "
-            "Shown for reference: it pulses with the percentage timer."
+            "The run output's reported state (0/1). Shown for reference: it pulses with the "
+            "percentage timer. Leave blank to use this input's automatic address, which the "
+            "edge bridge fills in. Or give a message path, e.g. '$io_state.x'."
         ),
-        default="$io_state.run",
+        default="",
         position=4,
     )
     forward_state_path = config.String(
         "Forward State Path",
         name="forward_state_path",
-        description="Message path of the forward output's reported state (0/1).",
-        default="$io_state.forward",
+        description=(
+            "The forward output's reported state (0/1). Leave blank to use this input's "
+            "automatic address, which the edge bridge fills in. Or give a message path, "
+            "e.g. '$io_state.x'."
+        ),
+        default="",
         position=5,
     )
     reverse_state_path = config.String(
         "Reverse State Path",
         name="reverse_state_path",
-        description="Message path of the reverse output's reported state (0/1).",
-        default="$io_state.reverse",
+        description=(
+            "The reverse output's reported state (0/1). Leave blank to use this input's "
+            "automatic address, which the edge bridge fills in. Or give a message path, "
+            "e.g. '$io_state.x'."
+        ),
+        default="",
         position=6,
     )
     speed_state_path = config.String(
         "Speed State Path",
         name="speed_state_path",
         description=(
-            "Optional message path of the speed (%) the controller reports it is running at. "
-            "Leave empty to show the speed of the last confirmed start."
+            "Optional: the speed (%) the controller reports it is running at. Until it "
+            "reports one, the speed of the last confirmed start is shown. Leave blank to "
+            "use this input's automatic address, which the edge bridge fills in. Or give a "
+            "message path, e.g. '$io_state.x'."
         ),
         default="",
         position=7,
@@ -129,7 +140,11 @@ class PivotControlConfig(config.Schema):
     safety_path = config.String(
         "Safety Input Path",
         name="safety_path",
-        description="Optional message path of the pivot's safety circuit input. Leave empty if none.",
+        description=(
+            "Optional: the pivot's safety circuit input. Not shown until it reports a "
+            "value. Leave blank to use this input's automatic address, which the edge "
+            "bridge fills in. Or give a message path, e.g. '$io_state.x'."
+        ),
         default="",
         position=8,
     )
@@ -229,7 +244,11 @@ class PivotControlConfig(config.Schema):
     pressure_path = config.String(
         "Line Pressure Path",
         name="pressure_path",
-        description="Optional message path of the raw line pressure input (e.g. mA). Leave empty if none.",
+        description=(
+            "Optional: the raw line pressure input (e.g. mA). Not shown until it reports a "
+            "value. Leave blank to use this input's automatic address, which the edge "
+            "bridge fills in. Or give a message path, e.g. '$io_state.x'."
+        ),
         default="",
         position=18,
     )
@@ -320,9 +339,11 @@ class PivotControlConfig(config.Schema):
         "Schedule State Path",
         name="schedule_state_path",
         description=(
-            "Optional message path where the edge reports the running schedule's progress "
-            "({schedule_id, step_index, step_progress, status}). Leave empty to show this "
-            "app's estimate from the angle and elapsed time."
+            "Optional: where the edge reports the running schedule's progress "
+            "({schedule_id, step_index, step_progress, status}). Until it reports, this "
+            "app's estimate from the angle and elapsed time is shown. Leave blank to use "
+            "this input's automatic address, which the edge bridge fills in. Or give a "
+            "message path, e.g. '$io_state.x'."
         ),
         default="",
         position=29,

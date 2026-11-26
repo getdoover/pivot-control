@@ -44,6 +44,24 @@ INPUTS = (
     ("schedule_state_path", "edge_schedule_state", "object"),
 )
 
+# Outputs whose reported state is read by message path, and whose point id is their Target
+# ID: (state path field, target field, default target, label).
+OUTPUT_POINTS = (
+    ("run_state_path", "run_target", "run", "Run"),
+    ("forward_state_path", "forward_target", "forward", "Forward"),
+    ("reverse_state_path", "reverse_target", "reverse", "Reverse"),
+)
+
+# Optional read-only inputs: (path field, point id, label). With an automatic address they
+# count as not configured until a value has ever arrived for them.
+INPUT_POINTS = (
+    ("speed_state_path", "speed", "Speed"),
+    ("safety_path", "safety", "Safety circuit"),
+    ("pressure_path", "pressure", "Line pressure"),
+    ("schedule_state_path", "schedule_state", "Schedule progress"),
+)
+OPTIONAL_INPUTS = frozenset(field for field, _id, _label in INPUT_POINTS)
+
 # Tags of the four fixed schedule slots this app used to have, cleared on deployment.
 LEGACY_SCHEDULE_TAGS = (
     "schedules",
@@ -83,12 +101,22 @@ class PivotControlApplication(Application):
     async def setup(self):
         self._schedule_state: tuple[dict | None, list[dict]] | None = None
         self._paths: dict[str, tuple[str, list[str]] | None] = {}
+        # Each input's point: (point id, label, path read, automatic).
+        self._points: dict[str, tuple[str, str, str, bool]] = {}
+        app_key = self.app_key or ""
+        for field, target_field, default, label in OUTPUT_POINTS:
+            point = str(self._cfg(target_field, "") or default).strip() or default
+            path, auto = model.resolve_input_path(self._cfg(field, ""), app_key, point)
+            self._points[field] = (point, label, path, auto)
+        for field, point, label in INPUT_POINTS:
+            path, auto = model.resolve_input_path(self._cfg(field, ""), app_key, point)
+            self._points[field] = (point, label, path, auto)
         for field, _tag, _kind in INPUTS:
-            raw = self._cfg(field, "")
-            parsed = model.parse_message_path(raw)
-            if raw and parsed is None:
+            path = self._points[field][2]
+            parsed = model.parse_message_path(path)
+            if parsed is None:
                 log.warning(
-                    "%s %r is not a '$channel.path' message path: ignored", field, raw
+                    "%s %r is not a '$channel.path' message path: ignored", field, path
                 )
             self._paths[field] = parsed
 
@@ -129,6 +157,31 @@ class PivotControlApplication(Application):
         except (AttributeError, ValueError):
             return None, None
 
+    def _has_input(self, field: str) -> bool:
+        """Whether an input counts as configured: an explicit path, a main input's
+        automatic address, or an optional input's automatic address that has ever had a
+        value (until then it looks exactly like an input left out)."""
+        if not self._paths.get(field):
+            return False
+        point, _label, _path, auto = self._points[field]
+        if auto and field in OPTIONAL_INPUTS:
+            return bool((self.tags.inputs_seen.value or {}).get(point))
+        return True
+
+    async def _publish_io_points(self):
+        """The io_points tag: where each output's state and each input is read from."""
+        entries = {
+            field: {"id": p[0], "label": p[1], "path": p[2], "auto": p[3]}
+            for field, p in self._points.items()
+        }
+        await self._set(
+            "io_points",
+            model.io_points(
+                [entries[f] for f, *_ in OUTPUT_POINTS],
+                [entries[f] for f, *_ in INPUT_POINTS],
+            ),
+        )
+
     async def _set(self, name: str, value):
         tag = getattr(self.tags, name)
         if tag.value != value:
@@ -140,11 +193,13 @@ class PivotControlApplication(Application):
         for name in LEGACY_SCHEDULE_TAGS:
             if self.tag_manager.get_tag(name) is not None:
                 await self.tag_manager.set_tag(name, None)
+        await self._publish_io_points()
         await self._publish_settings(*await self._load_schedules())
         await self._evaluate()
         await self._refresh_supply_pump()
 
     async def on_schedule(self, event: ScheduleEvent):
+        await self._publish_io_points()
         await self._evaluate()
         await self._refresh_supply_pump()
 
@@ -186,6 +241,10 @@ class PivotControlApplication(Application):
                 log.warning("%s at %s is not usable: %r", tag, ".".join(parsed[1]), raw)
                 continue
             await self._set(tag, value)
+            point = self._points[field][0]
+            seen = self.tags.inputs_seen.value or {}
+            if not seen.get(point):
+                await self._set("inputs_seen", dict(seen, **{point: True}))
 
     async def _on_command_channel(self, data: dict):
         """A controller's reply to one of our commands: {"request_id", "ok", "error"}."""
@@ -212,12 +271,12 @@ class PivotControlApplication(Application):
 
         forward_on = (
             self.tags.forward_output.value
-            if self._paths.get("forward_state_path")
+            if self._has_input("forward_state_path")
             else None
         )
         reverse_on = (
             self.tags.reverse_output.value
-            if self._paths.get("reverse_state_path")
+            if self._has_input("reverse_state_path")
             else None
         )
         has_reading = forward_on is not None or reverse_on is not None
@@ -237,7 +296,7 @@ class PivotControlApplication(Application):
         await self._set("status", model.status_text(state, direction, has_reading))
 
         # Speed: as reported, else the last confirmed start's while running.
-        if self._paths.get("speed_state_path"):
+        if self._has_input("speed_state_path"):
             speed = self.tags.reported_speed.value
         else:
             speed = self.tags.started_speed.value if state == model.RUNNING else None
@@ -311,7 +370,8 @@ class PivotControlApplication(Application):
         await self._set("heading", model.heading_text(angle))
 
     async def _update_safety(self, prev_safety: bool | None, running: bool):
-        if not self._paths.get("safety_path"):
+        await self._set("safety_hidden", not self._has_input("safety_path"))
+        if not self._has_input("safety_path"):
             safety_ok = None
         else:
             raw = self.tags.safety_input.value
@@ -337,7 +397,8 @@ class PivotControlApplication(Application):
 
     async def _update_pressure(self, running: bool, now: int):
         pressure = None
-        if self._paths.get("pressure_path"):
+        await self._set("pressure_hidden", not self._has_input("pressure_path"))
+        if self._has_input("pressure_path"):
             pressure = model.scale_pressure(
                 self.tags.pressure_input.value,
                 self._num("pressure_input_min", 4.0),
@@ -599,7 +660,7 @@ class PivotControlApplication(Application):
 
         status = None
         reported = None
-        if self._paths.get("schedule_state_path"):
+        if self._has_input("schedule_state_path"):
             reported = model.edge_progress(
                 self.tags.edge_schedule_state.value, active, now
             )

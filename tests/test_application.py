@@ -30,7 +30,8 @@ async def test_no_data_renders_cleanly_and_fires_nothing(harness):
 async def test_empty_config_does_not_raise():
     h = Harness(config={"APP_KEY": APP_KEY})
     app = await h.app()
-    await app.on_message_create(io_state(forward=1, reverse=0))
+    # Blank paths: the automatic addresses, $io_state.<app key>.<point id>.
+    await app.on_message_create(io_state(**{APP_KEY: {"forward": 1, "reverse": 0}}))
     assert app.tags.status.value == "Running Forward"
     assert app.tags.safety_ok.value is None  # no safety input configured
     await app.on_deployment(None)

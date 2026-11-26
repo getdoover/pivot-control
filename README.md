@@ -47,9 +47,9 @@ Key capabilities:
 
 1. Install **Pivot Control** on the pivot's device.
 2. Set the **output ids** the edge controller knows the run (percentage timer), forward and
-   reverse outputs by, and the **message paths** it reports their state on.
-3. Optionally point **Angle Source** at the app and tag that carry the pivot's angle, and set
-   the safety and line pressure inputs.
+   reverse outputs by. Leave the paths blank: the edge bridge fills in each reading at its
+   automatic address (see *Automatic addresses* below).
+3. Optionally point **Angle Source** at the app and tag that carry the pivot's angle.
 4. Optionally link the **supply pump**: its device, the Pump Control install's app key and
    the pump's Target ID, and add that device under **Devices** so its state can be read.
 5. Deploy. The page renders straight away and reads "No reading yet" until the controller
@@ -59,20 +59,40 @@ Key capabilities:
 
 ## Configuration
 
-Message paths are `$channel.path.to.value`, read from messages on the subscribed channels
-(for example `$io_state.forward`). Inputs are raw signals: 0/1 (or true/false, on/off) for
-outputs and the safety circuit, the loop current for pressure.
+Every path is blank by default. A blank path reads that input from its **automatic
+address**, `$io_state.<app key>.<point id>`, which the edge bridge fills in. To read it from
+somewhere else, give a message path, `$channel.path.to.value`, read from messages on the
+subscribed channels (for example `$io_state.forward`). Inputs are raw signals: 0/1 (or
+true/false, on/off) for outputs and the safety circuit, the loop current for pressure.
+
+| Reading | Point id | Path setting |
+|---------|----------|--------------|
+| Run output state | the Run Output id (`run`) | Run State Path |
+| Forward output state | the Forward Output id (`forward`) | Forward State Path |
+| Reverse output state | the Reverse Output id (`reverse`) | Reverse State Path |
+| Speed | `speed` | Speed State Path |
+| Safety circuit | `safety` | Safety Input Path |
+| Line pressure | `pressure` | Line Pressure Path |
+| Schedule progress | `schedule_state` | Schedule State Path |
+
+So with app key `pivot_control_1`, a message on `io_state` of
+`{"pivot_control_1": {"forward": 1, "reverse": 0, "pressure": 12.4}}` reports the pivot running
+forward with 12.4 mA on the pressure input.
+
+Speed, safety, pressure and schedule progress are optional. On their automatic address they
+show nothing, as if they weren't there, until a value first arrives; from then on they are
+always shown. A path you type in is always used and shown.
 
 | Setting | Key | Description | Default |
 |---------|-----|-------------|---------|
 | **Run Output** | `run_target` | Output id of the run / percentage timer; the `target` of start and stop commands | `run` |
 | **Forward Output** | `forward_target` | Output id of the forward signal | `forward` |
 | **Reverse Output** | `reverse_target` | Output id of the reverse signal | `reverse` |
-| **Run State Path** | `run_state_path` | Reported run output (pulses with the percentage timer) | `$io_state.run` |
-| **Forward State Path** | `forward_state_path` | Reported forward output | `$io_state.forward` |
-| **Reverse State Path** | `reverse_state_path` | Reported reverse output | `$io_state.reverse` |
-| **Speed State Path** | `speed_state_path` | Optional reported speed (%). Empty: the speed of the last confirmed start is shown while running | empty |
-| **Safety Input Path** | `safety_path` | Optional safety circuit input | empty |
+| **Run State Path** | `run_state_path` | Reported run output (pulses with the percentage timer) | blank (automatic) |
+| **Forward State Path** | `forward_state_path` | Reported forward output | blank (automatic) |
+| **Reverse State Path** | `reverse_state_path` | Reported reverse output | blank (automatic) |
+| **Speed State Path** | `speed_state_path` | Optional reported speed (%). Until one is reported, the speed of the last confirmed start is shown while running | blank (automatic) |
+| **Safety Input Path** | `safety_path` | Optional safety circuit input | blank (automatic) |
 | **Safety OK Value** | `safety_ok_value` | The safety input's value when healthy | `1` |
 | **Angle Source** | `angle_source` | `{app_name, tag_name}`: another app's tag carrying the angle, degrees, 0 = North, clockwise | tag `bearing_deg` |
 | **Pivot Centre Latitude / Longitude** | `pivot_centre_lat` / `pivot_centre_lon` | The pivot point, decimal degrees. Empty: the map uses the device's fixed location | empty |
@@ -80,7 +100,7 @@ outputs and the safety circuit, the loop current for pressure.
 | **Map Track (hours)** | `track_hours` | How much of the end tower's recent path the map draws | `24` |
 | **Position Source** | `position_source` | Where the end tower's GPS position comes from: *GPS tags* (the two tags below) or *Location channel* (the device's `location` channel) | GPS tags |
 | **Latitude Tag** / **Longitude Tag** | `latitude_source` / `longitude_source` | `{app_name, tag_name}`: another app's tags carrying the end tower's latitude and longitude | `gps_tracker_1` `latitude` / `longitude` |
-| **Line Pressure Path** | `pressure_path` | Optional raw pressure input | empty |
+| **Line Pressure Path** | `pressure_path` | Optional raw pressure input | blank (automatic) |
 | **Pressure Min / Max Input** | `pressure_input_min` / `pressure_input_max` | Raw input range | `4` / `20` |
 | **Pressure at Min / Max Input** | `pressure_min` / `pressure_max` | Pressure at each end of the range | `0` / `100` |
 | **Pressure Units** | `pressure_units` | Display units | `PSI` |
@@ -89,7 +109,7 @@ outputs and the safety circuit, the loop current for pressure.
 | **Percent Timer Cycle (s)** | `cycle_s` | One percentage-timer cycle: at 50 % the run output is on for half of it | `60` |
 | **Default Speed (%)** | `default_speed` | Speed offered for a new start or schedule step, and the speed of Simple schedules | `50` |
 | **Simple Schedules Run Wet** | `simple_wet` | Whether a Simple schedule runs wet (supply pump on) or dry | `true` |
-| **Schedule State Path** | `schedule_state_path` | Optional message path where the edge reports the running schedule's progress (see *Settings*). Empty: this app estimates it | empty |
+| **Schedule State Path** | `schedule_state_path` | Optional: where the edge reports the running schedule's progress (see *Settings*). Until it reports, this app estimates it | blank (automatic) |
 | **Max Run Hours** | `max_run_hours` | Longest run (or schedule step run time) the edge allows; 0 = no limit | `0` |
 | **Command Confirm Timeout (s)** | `confirm_timeout_s` | How long the reported state has to match a command | `120` |
 | **Timezone** | `dv_proc_timezone` | Timezone sent to the edge with the settings | `Australia/Brisbane` |
@@ -126,8 +146,9 @@ on the main map, leave the device's fixed location empty, set the pivot centre h
 the GPS source write the device's `location` channel (a GPS tracker app does).
 
 **Status.** Status, speed, angle and heading, safety (OK / Tripped), line pressure, last
-started, last stopped and the last command with its outcome. Safety, pressure and angle only
-show when configured.
+started, last stopped and the last command with its outcome. Angle shows when configured;
+safety and pressure show when their path is typed in, or once their automatic address has
+had a value.
 
 | Forward | Reverse | Status |
 |---------|---------|--------|
@@ -177,7 +198,7 @@ notification is sent. A controller that refuses a command and says so has its re
   holds it until **Resume**; **End schedule** (confirmed in place) ends it early. When its
   last step is done it moves to Past Schedules.
 
-Progress is what the edge reports at the *Schedule State Path* when one is set. Otherwise
+Progress is what the edge reports for schedule progress, once it has. Until then
 it is this app's estimate, labelled *estimated*: a run-time step counts the time since it
 began, less its start delay and time paused; an angle step counts the degrees the pivot has
 turned in the step's direction since it began (forward = clockwise, so a reverse run counts
@@ -205,7 +226,9 @@ angle.
 | **last_command** | string | The last command and its outcome |
 | **schedule_active** | object | The running schedule (as in *Settings* `schedule_state.active`) plus its `progress`; `null` when none |
 | **schedule_history** | array | The last five schedules, newest first, each with `status` `completed` or `ended` and `ended_ts` |
-| **edge_schedule_state** | object | The edge's last schedule report, when a Schedule State Path is set |
+| **edge_schedule_state** | object | The edge's last schedule progress report |
+| **io_points** | object | Where each reading is read from, for the edge bridge's map (see below) |
+| **inputs_seen** | object | The point ids that have ever had a value, e.g. `{"forward": true}` |
 | **supply_pump_name** | string | The linked supply pump, `<device>: <pump name>` |
 | **supply_pump_state** | string | Running / Stopped / Unknown, as its Pump Control install reports it |
 | **supply_pump_running** | boolean | `true` / `false` as reported; `null` when unknown |
@@ -215,8 +238,8 @@ angle.
 
 ### Inputs
 
-Raw signals at the configured message paths, on any subscribed channel. A message carrying
-only some of them updates those and keeps the rest. The angle is read from the Angle Source
+Raw signals at each input's automatic address or typed-in message path, on any subscribed
+channel. A message carrying only some of them updates those and keeps the rest. The angle is read from the Angle Source
 app's tag in `tag_values`. Without one, when the Position Source is *GPS tags* and the pivot
 centre is set, the angle is the bearing from the centre to the end tower's latitude /
 longitude tags (positions within 10 m of the centre give no angle). The map reads the same
@@ -227,6 +250,25 @@ The supply pump's state is read from the linked device's `tag_values` aggregate,
 Pump Control install's app key: `p_<target>_running`, `p_<target>_name`,
 `p_<target>_last_started` and `p_<target>_last_stopped` (the target with anything but
 letters, digits and `_` replaced by `_`). Reading another device needs it under **Devices**.
+
+### Points (`io_points` tag)
+
+Set on every deployment and schedule tick (written only when it changes), so the edge bridge
+can list where to put each reading. Outputs come first, then inputs. An output's `id` is its
+Target ID: commands use it as `target`, and its reported state arrives on `path`. `auto` says
+whether `path` is the automatic address.
+
+```json
+{"version": 1, "points": [
+  {"id": "run", "label": "Run", "kind": "output", "path": "$io_state.pivot_control_1.run", "auto": true},
+  {"id": "forward", "label": "Forward", "kind": "output", "path": "$io_state.pivot_control_1.forward", "auto": true},
+  {"id": "reverse", "label": "Reverse", "kind": "output", "path": "$io_state.pivot_control_1.reverse", "auto": true},
+  {"id": "speed", "label": "Speed", "kind": "input", "path": "$io_state.pivot_control_1.speed", "auto": true},
+  {"id": "safety", "label": "Safety circuit", "kind": "input", "path": "$io_state.pivot_control_1.safety", "auto": true},
+  {"id": "pressure", "label": "Line pressure", "kind": "input", "path": "$io_state.pivot_control_1.pressure", "auto": true},
+  {"id": "schedule_state", "label": "Schedule progress", "kind": "input", "path": "$io_state.pivot_control_1.schedule_state", "auto": true}
+]}
+```
 
 ### Commands
 
@@ -330,7 +372,7 @@ The supply pump runs through steps with `supply_pump_on` and is stopped for the 
 at the end; it is only true for a wet step with a linked pump that starts with the pivot.
 
 `schedule_state` is this app's own record of the running schedule and the last five, and is
-what the page shows. The edge may report its progress at the *Schedule State Path* as
+what the page shows. The edge may report its progress (point `schedule_state`) as
 `{"schedule_id": "<id>", "step_index": 0, "step_progress": 0.4, "status": "running"}`
 (`step_index` from 0, `step_progress` 0-1, `status` `running`, `paused`, `waiting`,
 `completed` or `ended`); `completed` or `ended` moves the schedule to the past schedules.

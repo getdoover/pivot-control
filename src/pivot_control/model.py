@@ -81,6 +81,48 @@ def parse_message_path(value: Any) -> tuple[str, list[str]] | None:
     return channel, parts
 
 
+AUTO_CHANNEL = "io_state"
+
+
+def auto_path(app_key: str, point_id: str) -> str:
+    """An input's automatic address: ``$io_state.<app key>.<point id>``."""
+    return f"${AUTO_CHANNEL}.{app_key}.{point_id}"
+
+
+def resolve_input_path(value: Any, app_key: str, point_id: str) -> tuple[str, bool]:
+    """The path an input is read from, and whether it is automatic.
+
+    Blank means the automatic address (which the edge bridge fills in); anything else is an
+    explicit message path and wins, exactly as given."""
+    explicit = value.strip() if isinstance(value, str) else ""
+    if explicit:
+        return explicit, False
+    return auto_path(app_key, point_id), True
+
+
+def io_points(outputs: list[dict], inputs: list[dict]) -> dict:
+    """The ``io_points`` tag: outputs first, then inputs, each in config order.
+
+    Each entry is ``{"id", "label", "path", "auto"}``; a point id seen twice keeps its
+    first entry, so ids stay unique within the install."""
+    points, seen = [], set()
+    for kind, entries in (("output", outputs), ("input", inputs)):
+        for entry in entries:
+            if entry["id"] in seen:
+                continue
+            seen.add(entry["id"])
+            points.append(
+                {
+                    "id": entry["id"],
+                    "label": entry["label"],
+                    "kind": kind,
+                    "path": entry["path"],
+                    "auto": bool(entry["auto"]),
+                }
+            )
+    return {"version": 1, "points": points}
+
+
 def extract_path_value(data: Any, path: list[str]):
     value = data
     for part in path:

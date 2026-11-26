@@ -30,6 +30,14 @@ class PivotControlTags(Tags):
     safety_input = Tag("number", default=None)
     pressure_input = Tag("number", default=None)
 
+    # Automatic input addresses: where each point is read from (for the edge bridge's map),
+    # and which points have ever had a value. An optional input on its automatic address is
+    # shown only once it has.
+    io_points = Tag("object", default=None)  # {"version": 1, "points": [...]}
+    inputs_seen = Tag("object", default=None)  # {point id: true}
+    safety_hidden = Tag("boolean", default=True)
+    pressure_hidden = Tag("boolean", default=True)
+
     # Commands.
     pending_command = Tag("object", default=None)  # the command message, plus timed_out
     started_speed = Tag("number", default=None)  # speed of the last start sent

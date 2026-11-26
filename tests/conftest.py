@@ -16,6 +16,10 @@ APP_KEY = "pivot_control_1"
 
 EXAMPLE_CONFIG = {
     "APP_KEY": APP_KEY,
+    # Explicit paths (flat on io_state); blank ones use the automatic addresses.
+    "run_state_path": "$io_state.run",
+    "forward_state_path": "$io_state.forward",
+    "reverse_state_path": "$io_state.reverse",
     "safety_path": "$io_state.safety",
     "safety_ok_value": 1.0,
     "angle_source": {"app_name": "gps_tracker_1", "tag_name": "bearing_deg"},
